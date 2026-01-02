@@ -1,7 +1,7 @@
 # risk-decision
 A reproducible, auditable, and explainable risk-based decision framework
 
-
+```
 risk-decision/
 ├── README.md
 ├── pyproject.toml
@@ -50,3 +50,4 @@ risk-decision/
 │           ├── __init__.py
 │           └── main.py
 └── tests/
+```
