@@ -4,10 +4,9 @@ import sys
 from pathlib import Path
 
 # ---- FIX FOR STREAMLIT CLOUD (src layout) ----
-ROOT = Path(__file__).resolve().parents[3]
-SRC = ROOT / "src"
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+SRC_PATH = Path(__file__).resolve().parents[2]
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 # --------------------------------------------
 
 import json
