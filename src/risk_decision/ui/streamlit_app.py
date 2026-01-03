@@ -1,27 +1,15 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
-
-# ---- FIX FOR STREAMLIT CLOUD (src layout) ----
-SRC_PATH = Path(__file__).resolve().parents[2]
-if str(SRC_PATH) not in sys.path:
-    sys.path.insert(0, str(SRC_PATH))
-# --------------------------------------------
-
-import json
 from typing import Any, Dict
 
 import streamlit as st
 
-from risk_decision.core.decision_engine import DecisionEngine
-from risk_decision.core.decision_types import DecisionContext
-from risk_decision.engine.scorer import BasicScorer
-from risk_decision.engine.aggregator import BasicAggregator
-from risk_decision.engine.classifier import BasicClassifier
-from risk_decision.engine.rules import BasicRules
-from risk_decision.engine.explainability import BasicExplainability
-from risk_decision.engine.audit_trail import BasicAuditTrail
+SRC_PATH = Path(__file__).resolve().parents[2]
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 
 
 def default_input() -> Dict[str, Any]:
@@ -47,20 +35,41 @@ def default_input() -> Dict[str, Any]:
     }
 
 
-def build_engine(low: float, high: float) -> DecisionEngine:
-    return DecisionEngine(
-        scorer=BasicScorer(),
-        aggregator=BasicAggregator(),
-        classifier=BasicClassifier(low_threshold=low, high_threshold=high),
-        rules=BasicRules(),
-        explainability=BasicExplainability(),
-        audit=BasicAuditTrail(),
-    )
-
-
 def main() -> None:
     st.set_page_config(page_title="Risk-Decision", layout="wide")
     st.title("Risk-Decision")
+
+    st.caption("Debug")
+    st.code(f"SRC_PATH = {SRC_PATH}")
+    st.code("sys.path (top 5):\n" + "\n".join(sys.path[:5]))
+
+    try:
+        pkg_dir = SRC_PATH / "risk_decision"
+        st.code(f"Package dir exists: {pkg_dir.exists()}")
+        if pkg_dir.exists():
+            st.code("risk_decision folder contents:\n" + "\n".join(sorted([p.name for p in pkg_dir.iterdir()])))
+        core_dir = pkg_dir / "core"
+        st.code(f"core dir exists: {core_dir.exists()}")
+        if core_dir.exists():
+            st.code("core folder contents:\n" + "\n".join(sorted([p.name for p in core_dir.iterdir()])))
+    except Exception as e:
+        st.error(f"Filesystem debug failed: {e}")
+
+    try:
+        from risk_decision.core.decision_engine import DecisionEngine
+        from risk_decision.core.decision_types import DecisionContext
+        from risk_decision.engine.scorer import BasicScorer
+        from risk_decision.engine.aggregator import BasicAggregator
+        from risk_decision.engine.classifier import BasicClassifier
+        from risk_decision.engine.rules import BasicRules
+        from risk_decision.engine.explainability import BasicExplainability
+        from risk_decision.engine.audit_trail import BasicAuditTrail
+    except ModuleNotFoundError as e:
+        st.error(f"ModuleNotFoundError: {e.name}")
+        st.stop()
+    except Exception as e:
+        st.error(f"Import failed: {type(e).__name__}: {e}")
+        st.stop()
 
     with st.sidebar:
         st.subheader("Thresholds")
@@ -78,7 +87,7 @@ def main() -> None:
 
     if reset:
         st.session_state.json_input = json.dumps(default_input(), indent=2)
-        st.experimental_rerun()
+        st.rerun()
 
     if not run:
         st.info("Click Run decision to execute the decision engine.")
@@ -100,7 +109,15 @@ def main() -> None:
         stage=str(ctx.get("stage", "")),
     )
 
-    engine = build_engine(low, high)
+    engine = DecisionEngine(
+        scorer=BasicScorer(),
+        aggregator=BasicAggregator(),
+        classifier=BasicClassifier(low_threshold=low, high_threshold=high),
+        rules=BasicRules(),
+        explainability=BasicExplainability(),
+        audit=BasicAuditTrail(),
+    )
+
     output = engine.run(context=context, payload=payload)
 
     st.subheader("Overall decision")
