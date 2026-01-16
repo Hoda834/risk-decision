@@ -1,0 +1,81 @@
+{
+  "policy_version": "v1.0",
+  "scales": {
+    "likelihood": {
+      "type": "ordinal",
+      "labels": {
+        "1": "unlikely",
+        "2": "possible",
+        "3": "likely"
+      },
+      "normalisation": {
+        "method": "minmax",
+        "min": 1,
+        "max": 3
+      }
+    },
+    "impact": {
+      "type": "ordinal",
+      "labels": {
+        "1": "minor",
+        "2": "major",
+        "3": "critical"
+      },
+      "normalisation": {
+        "method": "minmax",
+        "min": 1,
+        "max": 3
+      }
+    }
+  },
+  "scoring": {
+    "method": "multiply",
+    "rounding": {
+      "decimals": 4
+    }
+  },
+  "thresholds": {
+    "acceptance_threshold": 0.5,
+    "hard_accept_block_threshold": 0.7,
+    "categories": [
+      { "name": "low", "min": 0.0, "max": 0.2 },
+      { "name": "medium", "min": 0.2, "max": 0.5 },
+      { "name": "high", "min": 0.5, "max": 0.8 },
+      { "name": "critical", "min": 0.8, "max": 1.01 }
+    ]
+  },
+  "decision_policy": {
+    "recommended": [
+      { "if_score_lt": 0.2, "decision": "accept" },
+      { "if_score_lt": 0.5, "decision": "reduce" },
+      { "if_score_lt": 0.8, "decision": "reduce" },
+      { "if_score_gte": 0.8, "decision": "avoid" }
+    ],
+    "constraints": {
+      "accept_requires_rationale": true,
+      "accept_requires_owner": true,
+      "accept_requires_review_date": true
+    }
+  },
+  "escalation": {
+    "require_approval_if": {
+      "score_gte": 0.5,
+      "mandatory_obligation": true,
+      "privacy_flag": true,
+      "catastrophic_flag": true
+    },
+    "authority_matrix": [
+      { "role": "risk_owner", "max_score_to_accept": 0.2 },
+      { "role": "security_lead", "max_score_to_accept": 0.5 },
+      { "role": "management", "max_score_to_accept": 0.7 }
+    ]
+  },
+  "branching": {
+    "enabled": true,
+    "gating_branches": ["obligation", "third_party", "accept_escalation"],
+    "signals": {
+      "privacy_keywords": ["monitoring", "biometric", "children", "health", "location", "cctv"],
+      "catastrophic_if_impact_level_gte": 3
+    }
+  }
+}
