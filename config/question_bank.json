@@ -1,0 +1,168 @@
+[
+  {
+    "id": "Q1",
+    "text": "What is the thing you care about here?",
+    "input_type": "single_select",
+    "required": true,
+    "path": "anchor.anchor_type",
+    "options": ["asset", "objective", "process", "obligation", "opportunity"],
+    "checkpoint": "after_q1"
+  },
+  {
+    "id": "Q2",
+    "text": "Give it a short name.",
+    "input_type": "text",
+    "required": true,
+    "path": "anchor.name",
+    "validation": { "min_length": 2, "max_length": 120 }
+  },
+  {
+    "id": "Q3",
+    "text": "Why does this matter if it fails or succeeds?",
+    "input_type": "textarea",
+    "required": true,
+    "path": "anchor.value_statement",
+    "validation": { "min_length": 10, "max_length": 800 }
+  },
+  {
+    "id": "Q4",
+    "text": "Who owns this?",
+    "input_type": "text",
+    "required": true,
+    "path": "anchor.owner",
+    "validation": { "min_length": 2, "max_length": 120 }
+  },
+  {
+    "id": "Q5",
+    "text": "Is this a downside risk or an upside risk?",
+    "input_type": "single_select",
+    "required": true,
+    "path": "definition.direction",
+    "options": ["downside", "upside"],
+    "checkpoint": "after_q5"
+  },
+  {
+    "id": "Q6",
+    "text": "What specific event could happen?",
+    "input_type": "textarea",
+    "required": true,
+    "path": "definition.event",
+    "validation": { "min_length": 10, "max_length": 500, "reject_vague": true }
+  },
+  {
+    "id": "Q7",
+    "text": "What would trigger this event?",
+    "input_type": "list_text",
+    "required": true,
+    "path": "definition.triggers",
+    "validation": { "min_items": 1, "min_item_length": 3 }
+  },
+  {
+    "id": "Q8",
+    "text": "Why could this event happen?",
+    "input_type": "multi_select",
+    "required": true,
+    "path": "definition.cause_categories",
+    "options": ["human", "technical", "organisational", "external", "unknown_or_assumption"]
+  },
+  {
+    "id": "Q9",
+    "text": "Describe the weakest point that allows this to happen.",
+    "input_type": "textarea",
+    "required": true,
+    "path": "definition.vulnerability",
+    "validation": { "min_length": 10, "max_length": 800 },
+    "checkpoint": "after_q9"
+  },
+  {
+    "id": "Q10",
+    "text": "Which assumptions must remain true for this risk to exist?",
+    "input_type": "list_text",
+    "required": false,
+    "path": "definition.assumptions"
+  },
+  {
+    "id": "Q11",
+    "text": "What would be affected if this happens?",
+    "input_type": "multi_select",
+    "required": true,
+    "path": "impact.domains",
+    "options": ["financial", "legal_or_compliance", "operational", "safety", "reputation", "strategic"],
+    "checkpoint": "after_q11"
+  },
+  {
+    "id": "Q12",
+    "text": "Describe the worst credible outcome.",
+    "input_type": "textarea",
+    "required": true,
+    "path": "impact.worst_credible_outcome",
+    "validation": { "min_length": 10, "max_length": 900 }
+  },
+  {
+    "id": "Q13",
+    "text": "Would the damage be reversible?",
+    "input_type": "single_select",
+    "required": true,
+    "path": "impact.reversibility",
+    "options": ["fully", "partially", "not_reversible"]
+  },
+  {
+    "id": "Q14",
+    "text": "What is your likelihood judgement based on?",
+    "input_type": "single_select",
+    "required": true,
+    "path": "likelihood.basis",
+    "options": ["historical_data", "measured_data", "expert_judgement", "assumption"]
+  },
+  {
+    "id": "Q15",
+    "text": "Select the likelihood level that best fits today.",
+    "input_type": "single_select",
+    "required": true,
+    "path": "likelihood.raw_value",
+    "options_from_policy": "scales.likelihood.labels",
+    "checkpoint": "after_q15"
+  },
+  {
+    "id": "Q16",
+    "text": "Select the impact level that best fits the described outcome.",
+    "input_type": "single_select",
+    "required": true,
+    "path": "impact.raw_value",
+    "options_from_policy": "scales.impact.labels",
+    "checkpoint": "after_q16"
+  },
+  {
+    "id": "Q17",
+    "text": "Is this impact acceptable if it happens once?",
+    "input_type": "single_select",
+    "required": true,
+    "path": "impact.acceptability_hint",
+    "options": ["yes", "no", "only_under_conditions"]
+  },
+  {
+    "id": "Q18",
+    "text": "Does the calculated level reflect your understanding?",
+    "input_type": "single_select",
+    "required": true,
+    "path": "evaluation_feedback.confirmed",
+    "options": ["true", "false"]
+  },
+  {
+    "id": "Q19",
+    "text": "If not, explain why.",
+    "input_type": "textarea",
+    "required_if": { "path": "evaluation_feedback.confirmed", "equals": "false" },
+    "path": "evaluation_feedback.challenge_note",
+    "validation": { "max_length": 700 }
+  },
+  {
+    "id": "Q20",
+    "text": "What will you do about this risk?",
+    "input_type": "single_select",
+    "required": true,
+    "path": "decision.decision_type",
+    "options": ["accept", "reduce", "transfer", "avoid", "defer"],
+    "checkpoint": "after_q20"
+  }
+]
