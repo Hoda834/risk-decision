@@ -1,393 +1,236 @@
 from __future__ import annotations
 
+import json
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
-from pydantic import ValidationError
 
-from models import (
-    AssessmentModel,
-    ImpactModel,
-    LikelihoodModel,
-    RiskCaseDraft,
-    RiskModel,
-    ThreatVectorModel,
-)
-
-
-class WizardStateEnum(str, Enum):
-    DRAFT = "DRAFT"
-    ANCHOR = "ANCHOR"
-    RISK_EVENT = "RISK_EVENT"
-    THREAT_VECTOR = "THREAT_VECTOR"
-    CAUSES = "CAUSES"
-    ASSESSMENT = "ASSESSMENT"
-    IMPACT = "IMPACT"
-    SNAPSHOT = "SNAPSHOT"
-    DECISION = "DECISION"
-    TREATMENT = "TREATMENT"
-    ACCEPTANCE = "ACCEPTANCE"
-    END = "END"
-
-
-@dataclass(frozen=True)
-class Question:
-    key: str
-    label: str
-    help: str
-    kind: str  # text, textarea, selectbox, multiselect, slider
-    required: bool = True
-    options: Optional[List[str]] = None
-    min_len: Optional[int] = None
-    max_len: Optional[int] = None
-    min_items: Optional[int] = None
-    max_items: Optional[int] = None
-    slider_min: Optional[float] = None
-    slider_max: Optional[float] = None
-    slider_step: Optional[float] = None
-
-
-def _now_iso() -> str:
+def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def initial_payload() -> Dict[str, Any]:
-    now = _now_iso()
+@dataclass
+class WizardState:
+    case_id: str
+    version: int
+    policy_version: str
+    current_index: int = 0
+    snapshot_locked: bool = False
+    decision_locked: bool = False
+
+
+@dataclass
+class DraftModel:
+    case_id: str
+    version: int
+    policy_version: str
+    payload: Dict[str, Any]
+
+    def model_dump(self) -> Dict[str, Any]:
+        return dict(self.payload)
+
+
+def new_case_id() -> str:
+    return uuid.uuid4().hex[:10]
+
+
+def initial_payload(policy: Any, case_id: str, version: int = 1) -> Dict[str, Any]:
+    now = _utc_iso()
+    policy_version = getattr(policy, "policy_version", "unknown")
     return {
-        "case_id": f"case_{int(datetime.now(timezone.utc).timestamp())}",
-        "version": 1,
+        "case_id": case_id,
+        "version": int(version),
+        "policy_version": str(policy_version),
         "created_at": now,
         "updated_at": now,
-        "anchor": {
-            "name": "",
-            "type": "asset",
-            "owner": "",
-            "value_statement": "",
-            "tags": [],
-        },
-        "risk": {
-            "event": "",
-            "triggers": [],
-            "cause_categories": [],
-            "vulnerability": "",
-            "threat_vector": {"vector": "human_error", "notes": ""},
-            "assumptions": [],
-        },
-        "assessment": {
-            "likelihood": {"raw_value": 1, "normalised": 0.0},
-            "impact": {
-                "domains": [],
-                "worst_credible_outcome": "",
-                "reversibility": "reversible",
-                "acceptability_hint": "unknown",
-                "normalised": 0.0,
-            },
-            "detectability": {"raw_value": 3, "normalised": 0.0},
-            "risk_score": {"raw": 0.0, "weighted": 0.0},
-            "notes": "",
-        },
+        "answers": {},
+        "progress": {"answered": 0, "total": 0, "percent": 0.0, "snapshot_locked": False, "decision_locked": False},
         "evaluation_snapshot": None,
         "decision": None,
-        "treatment": None,
-        "acceptance": None,
-        "wizard": {
-            "state": WizardStateEnum.ANCHOR.value,
-            "history": [],
-        },
+        "notes": [],
     }
 
 
-def questions_for_state(state: WizardStateEnum) -> List[Question]:
-    if state == WizardStateEnum.ANCHOR:
-        return [
-            Question(
-                key="anchor.name",
-                label="What is the anchor asset or decision object name",
-                help="Example: Customer database, Payment gateway, Pricing model",
-                kind="text",
-                required=True,
-                min_len=2,
-                max_len=120,
-            ),
-            Question(
-                key="anchor.owner",
-                label="Who owns it",
-                help="Team or role responsible",
-                kind="text",
-                required=True,
-                min_len=2,
-                max_len=120,
-            ),
-            Question(
-                key="anchor.value_statement",
-                label="Why does it matter",
-                help="One sentence value statement",
-                kind="textarea",
-                required=True,
-                min_len=5,
-                max_len=600,
-            ),
-        ]
-
-    if state == WizardStateEnum.RISK_EVENT:
-        return [
-            Question(
-                key="risk.event",
-                label="What could go wrong",
-                help="Describe the risk event in plain language",
-                kind="textarea",
-                required=True,
-                min_len=4,
-                max_len=800,
-            ),
-            Question(
-                key="risk.triggers",
-                label="What would trigger it",
-                help="Add at least one trigger",
-                kind="multiselect",
-                required=True,
-                options=[
-                    "Process deviation",
-                    "Human error",
-                    "Supplier failure",
-                    "System outage",
-                    "Data quality issue",
-                    "Security incident",
-                    "Regulatory change",
-                    "Market change",
-                    "Fraud or misuse",
-                    "Other",
-                ],
-                min_items=1,
-                max_items=8,
-            ),
-        ]
-
-    if state == WizardStateEnum.THREAT_VECTOR:
-        return [
-            Question(
-                key="risk.threat_vector.vector",
-                label="Threat vector",
-                help="Choose the dominant vector",
-                kind="selectbox",
-                required=True,
-                options=["human_error", "malicious", "technical_failure", "process_failure", "external_event"],
-            ),
-            Question(
-                key="risk.threat_vector.notes",
-                label="Threat vector notes",
-                help="Optional context",
-                kind="textarea",
-                required=False,
-                max_len=500,
-            ),
-        ]
-
-    if state == WizardStateEnum.CAUSES:
-        return [
-            Question(
-                key="risk.cause_categories",
-                label="Cause categories",
-                help="Select at least one",
-                kind="multiselect",
-                required=True,
-                options=["people", "process", "technology", "data", "external"],
-                min_items=1,
-                max_items=5,
-            ),
-            Question(
-                key="risk.vulnerability",
-                label="What makes you exposed",
-                help="Vulnerability or weakness",
-                kind="textarea",
-                required=True,
-                min_len=4,
-                max_len=700,
-            ),
-        ]
-
-    if state == WizardStateEnum.ASSESSMENT:
-        return [
-            Question(
-                key="assessment.likelihood.raw_value",
-                label="Likelihood",
-                help="1 low, 2 possible, 3 likely",
-                kind="slider",
-                required=True,
-                slider_min=1,
-                slider_max=3,
-                slider_step=1,
-            ),
-            Question(
-                key="assessment.detectability.raw_value",
-                label="Detectability",
-                help="1 hard to detect, 2 medium, 3 easy to detect",
-                kind="slider",
-                required=True,
-                slider_min=1,
-                slider_max=3,
-                slider_step=1,
-            ),
-        ]
-
-    if state == WizardStateEnum.IMPACT:
-        return [
-            Question(
-                key="assessment.impact.domains",
-                label="Impact domains",
-                help="Pick at least one impacted domain",
-                kind="multiselect",
-                required=True,
-                options=["financial", "operations", "legal", "reputation", "customers", "safety"],
-                min_items=1,
-                max_items=6,
-            ),
-            Question(
-                key="assessment.impact.worst_credible_outcome",
-                label="Worst credible outcome",
-                help="Describe the worst credible outcome",
-                kind="textarea",
-                required=True,
-                min_len=5,
-                max_len=900,
-            ),
-        ]
-
-    if state == WizardStateEnum.DECISION:
-        return [
-            Question(
-                key="decision",
-                label="Decision",
-                help="Set the decision recommendation",
-                kind="selectbox",
-                required=True,
-                options=["accept", "mitigate", "avoid", "transfer"],
-            )
-        ]
-
-    if state == WizardStateEnum.TREATMENT:
-        return [
-            Question(
-                key="treatment",
-                label="Treatment plan",
-                help="Describe the treatment approach",
-                kind="textarea",
-                required=False,
-                max_len=1200,
-            )
-        ]
-
-    if state == WizardStateEnum.ACCEPTANCE:
-        return [
-            Question(
-                key="acceptance",
-                label="Acceptance note",
-                help="Who accepts and why",
-                kind="textarea",
-                required=False,
-                max_len=1200,
-            )
-        ]
-
-    return []
+def latest_version_id(meta: Optional[Dict[str, Any]], payload: Optional[Dict[str, Any]]) -> int:
+    mv = 0
+    if meta and meta.get("current_version") is not None:
+        try:
+            mv = int(meta["current_version"])
+        except Exception:
+            mv = 0
+    pv = 0
+    if payload and payload.get("version") is not None:
+        try:
+            pv = int(payload["version"])
+        except Exception:
+            pv = 0
+    return max(mv, pv, 1)
 
 
-def validate_answer_for_question(q: Question, answer: Any) -> Optional[str]:
-    if q.required:
-        if q.kind in {"text", "textarea"}:
-            if not isinstance(answer, str) or not answer.strip():
-                return "This field is required."
-        if q.kind in {"selectbox"}:
-            if answer is None or (isinstance(answer, str) and not answer.strip()):
-                return "This field is required."
-        if q.kind in {"multiselect"}:
-            if not isinstance(answer, list) or len(answer) == 0:
-                return "Select at least one option."
-        if q.kind == "slider":
-            if answer is None:
-                return "This field is required."
+def make_draft_model(payload: Dict[str, Any]) -> DraftModel:
+    if not isinstance(payload, dict):
+        raise TypeError("payload must be a dict")
 
-    if isinstance(answer, str):
-        if q.min_len is not None and len(answer.strip()) < q.min_len:
-            return f"Minimum length is {q.min_len}."
-        if q.max_len is not None and len(answer) > q.max_len:
-            return f"Maximum length is {q.max_len}."
+    case_id = str(payload.get("case_id") or "").strip()
+    if not case_id:
+        case_id = new_case_id()
+        payload["case_id"] = case_id
 
-    if isinstance(answer, list):
-        if q.min_items is not None and len(answer) < q.min_items:
-            return f"Select at least {q.min_items}."
-        if q.max_items is not None and len(answer) > q.max_items:
-            return f"Select at most {q.max_items}."
+    try:
+        version = int(payload.get("version") or 1)
+    except Exception:
+        version = 1
+        payload["version"] = 1
 
-    return None
+    policy_version = str(payload.get("policy_version") or "unknown")
+    payload.setdefault("policy_version", policy_version)
+
+    payload.setdefault("created_at", _utc_iso())
+    payload["updated_at"] = _utc_iso()
+    payload.setdefault("answers", {})
+    payload.setdefault("notes", [])
+
+    return DraftModel(case_id=case_id, version=version, policy_version=policy_version, payload=payload)
 
 
-def _set_nested(payload: Dict[str, Any], dotted_key: str, value: Any) -> None:
-    parts = dotted_key.split(".")
+def compute_progress(draft: DraftModel, policy: Any, questions: List[Any]) -> Dict[str, Any]:
+    payload = draft.payload or {}
+    answers = payload.get("answers") or {}
+    if not isinstance(answers, dict):
+        answers = {}
+
+    total = len(questions) if questions else 0
+    answered = 0
+
+    for q in questions or []:
+        qid = getattr(q, "qid", None) or getattr(q, "id", None)
+        if not qid:
+            continue
+        val = answers.get(str(qid))
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip():
+            continue
+        if isinstance(val, list) and len(val) == 0:
+            continue
+        answered += 1
+
+    percent = (answered / total) * 100.0 if total else 0.0
+    snapshot_locked = bool(payload.get("evaluation_snapshot"))
+    decision_locked = bool(payload.get("decision"))
+
+    return {
+        "answered": answered,
+        "total": total,
+        "percent": round(percent, 1),
+        "snapshot_locked": snapshot_locked,
+        "decision_locked": decision_locked,
+    }
+
+
+def load_question_bank(policy: Any) -> List[Any]:
+    from core.questions import load_question_bank as _load
+    return _load(policy)
+
+
+def should_compute_snapshot(qid: str) -> bool:
+    from core.questions import should_compute_snapshot as _should
+    return _should(qid)
+
+
+def required_if_met(payload: Dict[str, Any], q: Any) -> bool:
+    rule = getattr(q, "required_if", None)
+    if not rule:
+        return bool(getattr(q, "required", False))
+
+    answers = payload.get("answers") if isinstance(payload.get("answers"), dict) else {}
+    if isinstance(rule, dict):
+        for dep_qid, dep_val in rule.items():
+            actual = answers.get(str(dep_qid))
+            if isinstance(dep_val, list):
+                if actual in dep_val:
+                    return True
+            else:
+                if actual == dep_val:
+                    return True
+        return False
+
+    return bool(getattr(q, "required", False))
+
+
+def can_go_back(state: WizardState) -> bool:
+    return state.current_index > 0
+
+
+def _set_by_path(payload: Dict[str, Any], path: Any, value: Any) -> None:
+    if isinstance(path, str):
+        keys = [k for k in path.split(".") if k]
+    elif isinstance(path, (list, tuple)):
+        keys = [str(k) for k in path if str(k)]
+    else:
+        keys = []
+
+    if not keys:
+        return
+
     cur: Any = payload
-    for p in parts[:-1]:
-        if p not in cur or not isinstance(cur[p], dict):
-            cur[p] = {}
-        cur = cur[p]
-    cur[parts[-1]] = value
+    for k in keys[:-1]:
+        if not isinstance(cur, dict):
+            return
+        if k not in cur or not isinstance(cur[k], dict):
+            cur[k] = {}
+        cur = cur[k]
+    if isinstance(cur, dict):
+        cur[keys[-1]] = value
 
 
-def apply_answer(payload: Dict[str, Any], question_key: str, answer: Any) -> Dict[str, Any]:
-    _set_nested(payload, question_key, answer)
-    payload["updated_at"] = _now_iso()
+def apply_answer(payload: Dict[str, Any], q: Any, answer: Any, policy: Any) -> Dict[str, Any]:
+    answers = payload.get("answers")
+    if not isinstance(answers, dict):
+        answers = {}
+
+    qid = getattr(q, "qid", None) or getattr(q, "id", None)
+    if qid:
+        answers[str(qid)] = answer
+    payload["answers"] = answers
+
+    path = getattr(q, "path", None) or getattr(q, "target_path", None)
+    if path:
+        _set_by_path(payload, path, answer)
+
+    payload["updated_at"] = _utc_iso()
     return payload
 
 
-def _push_history(payload: Dict[str, Any], state: WizardStateEnum) -> None:
-    wiz = payload.setdefault("wizard", {})
-    hist = wiz.setdefault("history", [])
-    hist.append(state.value)
-    if len(hist) > 50:
-        del hist[0]
-
-
-def next_state(current: WizardStateEnum) -> WizardStateEnum:
-    order = [
-        WizardStateEnum.ANCHOR,
-        WizardStateEnum.RISK_EVENT,
-        WizardStateEnum.THREAT_VECTOR,
-        WizardStateEnum.CAUSES,
-        WizardStateEnum.ASSESSMENT,
-        WizardStateEnum.IMPACT,
-        WizardStateEnum.SNAPSHOT,
-        WizardStateEnum.DECISION,
-        WizardStateEnum.TREATMENT,
-        WizardStateEnum.ACCEPTANCE,
-        WizardStateEnum.END,
-    ]
-    idx = order.index(current) if current in order else 0
-    return order[min(idx + 1, len(order) - 1)]
-
-
-def step_back(payload: Dict[str, Any]) -> WizardStateEnum:
-    wiz = payload.get("wizard", {})
-    hist: List[str] = wiz.get("history", [])
-    if not hist:
-        return WizardStateEnum.ANCHOR
-    hist.pop()
-    prev = hist[-1] if hist else WizardStateEnum.ANCHOR.value
-    return WizardStateEnum(prev)
-
-
-def set_state(payload: Dict[str, Any], state: WizardStateEnum) -> None:
-    _push_history(payload, state)
-    payload.setdefault("wizard", {})["state"] = state.value
-    payload["updated_at"] = _now_iso()
-
-
-def make_draft_model(payload: Dict[str, Any]) -> RiskCaseDraft:
-    return RiskCaseDraft.model_validate(payload)
-
-
-def try_make_draft_model(payload: Dict[str, Any]) -> Tuple[Optional[RiskCaseDraft], Optional[str]]:
+def compute_and_lock_snapshot(payload: Dict[str, Any], policy: Any) -> Tuple[Dict[str, Any], str]:
+    snapshot: Dict[str, Any]
     try:
-        return make_draft_model(payload), None
-    except ValidationError as e:
-        return None, str(e)
+        from core.engine import compute_snapshot  # اگر وجود داشت
+        snapshot = compute_snapshot(payload=payload, policy=policy)
+    except Exception:
+        answers = payload.get("answers") if isinstance(payload.get("answers"), dict) else {}
+        snapshot = {
+            "computed_at": _utc_iso(),
+            "policy_version": payload.get("policy_version", "unknown"),
+            "answered_count": len(answers),
+            "score": len(answers),
+            "category": "draft",
+            "recommended_decision": "continue",
+        }
+
+    payload["evaluation_snapshot"] = snapshot
+    payload["updated_at"] = _utc_iso()
+    return snapshot, json.dumps(snapshot, ensure_ascii=False, indent=2)
+
+
+def clone_to_new_version(payload: Dict[str, Any], policy: Any) -> Tuple[Dict[str, Any], int]:
+    current_version = int(payload.get("version") or 1)
+    new_version = current_version + 1
+    new_payload = json.loads(json.dumps(payload))
+    new_payload["version"] = new_version
+    new_payload["evaluation_snapshot"] = None
+    new_payload["decision"] = None
+    new_payload["updated_at"] = _utc_iso()
+    return new_payload, new_version
