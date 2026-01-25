@@ -8,7 +8,7 @@ from risk_decision.core.decision_engine import DecisionEngine
 from risk_decision.core.decision_types import DecisionContext
 from risk_decision.engine.scorer import BasicScorer
 from risk_decision.engine.aggregator import BasicAggregator
-from risk_decision.engine.classifier import BasicClassifier
+from risk_decision.engine.classifier import BasicClassifier, PolicyAwareClassifier
 from risk_decision.engine.rules import BasicRules
 from risk_decision.engine.explainability import BasicExplainability
 from risk_decision.engine.audit_trail import BasicAuditTrail
@@ -42,10 +42,20 @@ def main() -> int:
         metadata=dict(context_data.get("metadata", {}) or {}),
     )
 
+    risk_appetite = context.risk_appetite.strip().lower() or "medium"
+    stage = context.stage.strip().lower() or None
+
+    classifier = PolicyAwareClassifier(
+        base_low_threshold=20.0,
+        base_high_threshold=45.0,
+        risk_appetite=risk_appetite,
+        stage=stage,
+    )
+
     engine = DecisionEngine(
         scorer=BasicScorer(),
         aggregator=BasicAggregator(),
-        classifier=BasicClassifier(),
+        classifier=classifier,
         rules=BasicRules(),
         explainability=BasicExplainability(),
         audit=BasicAuditTrail(),
@@ -59,6 +69,7 @@ def main() -> int:
             "title": output.context.title,
             "activity": output.context.activity,
             "stage": output.context.stage,
+            "risk_appetite": output.context.risk_appetite,
         },
         "overall_decision": output.overall.value,
         "per_domain": {
