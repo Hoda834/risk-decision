@@ -1,100 +1,121 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
-def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+class AnchorType(str, Enum):
+    PROBLEM = "Problem"
+    OPPORTUNITY = "Opportunity"
+    DECISION = "Decision"
+
+
+class Direction(str, Enum):
+    NEGATIVE = "Negative"
+    POSITIVE = "Positive"
+    MIXED = "Mixed"
+
+
+class LikelihoodBasis(str, Enum):
+    EXPERT_JUDGEMENT = "Expert judgement"
+    HISTORICAL_DATA = "Historical data"
+    BENCHMARKING = "Benchmarking"
+    SIMULATION = "Simulation"
+
+
+class ImpactDomain(str, Enum):
+    FINANCIAL = "Financial"
+    OPERATIONAL = "Operational"
+    REGULATORY = "Regulatory"
+    REPUTATIONAL = "Reputational"
+    SAFETY = "Safety"
+
+
+class Reversibility(str, Enum):
+    REVERSIBLE = "Reversible"
+    PARTIALLY_REVERSIBLE = "Partially reversible"
+    IRREVERSIBLE = "Irreversible"
+
+
+class AcceptabilityHint(str, Enum):
+    ACCEPTABLE = "Acceptable"
+    TOLERABLE = "Tolerable"
+    NOT_ACCEPTABLE = "Not acceptable"
+
+
+class DecisionType(str, Enum):
+    ACCEPT = "ACCEPT"
+    REDUCE = "REDUCE"
+    TRANSFER = "TRANSFER"
+    AVOID = "AVOID"
+    DEFER = "DEFER"
 
 
 class RiskAnchor(BaseModel):
-    """
-    Draft-friendly anchor model.
-    Empty strings are allowed at draft stage.
-    Step-level checks should be enforced by the wizard / UI.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    name: str = ""
-    anchor_type: Literal["asset", "process", "organisation", "other"] = "asset"
-    description: str = ""
-    domains: List[str] = Field(default_factory=list)
+    anchor_type: AnchorType = Field(..., description="The anchor type for the risk case.")
+    name: str = Field(..., min_length=1, description="A human friendly case name.")
+    value_statement: str = Field(..., min_length=1, description="What value is at stake.")
+    owner: str = Field(..., min_length=1, description="Owner of the risk case.")
 
 
 class RiskDefinition(BaseModel):
-    """
-    Draft-friendly definition model.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    event: str = ""
-    causes: List[str] = Field(default_factory=list)
-    consequences: List[str] = Field(default_factory=list)
-    assumptions: List[str] = Field(default_factory=list)
-    stakeholders: List[str] = Field(default_factory=list)
-
-
-class RiskLikelihood(BaseModel):
-    """
-    Draft-friendly likelihood model.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    raw_value: int = 1
-    normalised: float = 0.0
-    evidence_source: str = ""
-    notes: str = ""
+    event: str = Field(..., min_length=1, description="What could happen.")
+    triggers: List[str] = Field(..., min_length=1, description="Triggers or leading events.")
+    cause_categories: List[str] = Field(..., min_length=1, description="Cause categories.")
+    vulnerability: str = Field(..., min_length=1, description="Why this is exposed.")
+    consequences: str = Field(..., min_length=1, description="Consequences summary.")
+    time_to_impact_months: int = Field(..., ge=0, description="Time to impact in months.")
+    scope: str = Field(..., min_length=1, description="What is in scope.")
+    assumptions: str = Field(..., min_length=1, description="Assumptions.")
+    data_used: str = Field(..., min_length=1, description="Data used.")
+    references: str = Field(..., min_length=1, description="References.")
 
 
-class RiskImpact(BaseModel):
-    """
-    Draft-friendly impact model.
-    """
+class LikelihoodAssessment(BaseModel):
+    basis: LikelihoodBasis = Field(..., description="Basis used to assess likelihood.")
+    signals: List[str] = Field(default_factory=list, description="Signals to watch.")
+    raw_value: int = Field(..., ge=1, le=5, description="Raw likelihood score 1-5.")
+    normalised: float = Field(..., ge=0.0, le=1.0, description="Normalised likelihood 0-1.")
+    confidence: int = Field(..., ge=1, le=5, description="Confidence 1-5.")
 
-    model_config = ConfigDict(extra="allow")
 
-    raw_value: int = 1
-    normalised: float = 0.0
-    worst_credible_outcome: str = ""
-    notes: str = ""
+class ImpactAssessment(BaseModel):
+    domains: List[ImpactDomain] = Field(default_factory=list, description="Impact domains.")
+    worst_credible_outcome: str = Field(..., min_length=1, description="Worst credible outcome.")
+    reversibility: Reversibility = Field(..., description="Reversibility.")
+    raw_value: int = Field(..., ge=1, le=5, description="Raw impact severity 1-5.")
+    normalised: float = Field(..., ge=0.0, le=1.0, description="Normalised impact 0-1.")
+    confidence: int = Field(..., ge=1, le=5, description="Confidence 1-5.")
+    acceptability_hint: AcceptabilityHint = Field(..., description="Acceptability hint.")
+
+
+class EvaluationSnapshot(BaseModel):
+    created_at: str = Field(..., description="UTC ISO timestamp of evaluation.")
+    policy_version: str = Field(..., description="Policy version.")
+    overall_risk_score: float = Field(..., ge=0.0, le=1.0, description="Overall risk score 0-1.")
+    risk_category: str = Field(..., description="low|medium|high")
+    inputs_hash: str = Field(..., description="Hash of inputs.")
+
+
+class DecisionRecord(BaseModel):
+    decision_type: DecisionType = Field(..., description="Decision category.")
+    rationale: str = Field(..., min_length=1, description="Why this decision.")
+    owner: str = Field(..., min_length=1, description="Owner.")
+
+
+class EvaluationFeedback(BaseModel):
+    messages: List[str] = Field(default_factory=list, description="Feedback messages.")
 
 
 class RiskCaseDraft(BaseModel):
-    """
-    Draft model used for storage and iterative editing.
-
-    Intentionally permissive so a new case can be created with placeholders,
-    then completed step-by-step in Streamlit.
-    """
-
-    model_config = ConfigDict(extra="allow")
-
-    case_id: str
-    case_name: str = ""
-    version: int
-
-    created_at: datetime = Field(default_factory=utc_now)
-    updated_at: datetime = Field(default_factory=utc_now)
-
-    policy_id: str = ""
-    policy_version: str = ""
-
-    anchor: RiskAnchor = Field(default_factory=RiskAnchor)
-    definition: RiskDefinition = Field(default_factory=RiskDefinition)
-    likelihood: RiskLikelihood = Field(default_factory=RiskLikelihood)
-    impact: RiskImpact = Field(default_factory=RiskImpact)
-
-    # Stored and edited by the app, keep them flexible but persistent.
-    decision: Dict[str, Any] = Field(default_factory=dict)
-    mitigations: List[Dict[str, Any]] = Field(default_factory=list)
-    history: List[Dict[str, Any]] = Field(default_factory=list)
-
-    def touch(self) -> "RiskCaseDraft":
-        self.updated_at = utc_now()
-        return self
+    case_id: str = Field(..., min_length=1)
+    version: int = Field(..., ge=1)
+    anchor: RiskAnchor
+    definition: RiskDefinition
+    likelihood: LikelihoodAssessment
+    impact: ImpactAssessment
+    evaluation_snapshot: Optional[Dict[str, Any]] = None
+    decision: Optional[Dict[str, Any]] = None
+    feedback: Optional[Dict[str, Any]] = None
