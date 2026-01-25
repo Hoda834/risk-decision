@@ -1,174 +1,100 @@
 from __future__ import annotations
 
-from datetime import datetime
-from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Literal
 
-import re
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class AnchorType(str, Enum):
-    ASSET = "asset"
-    OBJECTIVE = "objective"
-    PROCESS = "process"
-    OBLIGATION = "obligation"
-    OPPORTUNITY = "opportunity"
-
-
-class RiskDirection(str, Enum):
-    DOWNSIDE = "downside"
-    UPSIDE = "upside"
-
-
-class CauseCategory(str, Enum):
-    HUMAN = "human"
-    TECHNICAL = "technical"
-    ORGANISATIONAL = "organisational"
-    EXTERNAL = "external"
-    UNKNOWN_ASSUMPTION = "unknown_or_assumption"
-
-
-class ImpactDomain(str, Enum):
-    FINANCIAL = "financial"
-    LEGAL_COMPLIANCE = "legal_or_compliance"
-    OPERATIONAL = "operational"
-    SAFETY = "safety"
-    REPUTATION = "reputation"
-    STRATEGIC = "strategic"
-
-
-class Reversibility(str, Enum):
-    FULLY = "fully"
-    PARTIALLY = "partially"
-    NOT_REVERSIBLE = "not_reversible"
-
-
-class LikelihoodBasis(str, Enum):
-    HISTORICAL_DATA = "historical_data"
-    MEASURED_DATA = "measured_data"
-    EXPERT_JUDGEMENT = "expert_judgement"
-    ASSUMPTION = "assumption"
-
-
-class AcceptabilityHint(str, Enum):
-    YES = "yes"
-    NO = "no"
-    ONLY_UNDER_CONDITIONS = "only_under_conditions"
-
-
-class DecisionType(str, Enum):
-    ACCEPT = "accept"
-    REDUCE = "reduce"
-    TRANSFER = "transfer"
-    AVOID = "avoid"
-    DEFER = "defer"
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class RiskAnchor(BaseModel):
-    anchor_type: AnchorType
-    name: str = Field(..., min_length=2, max_length=120)
-    value_statement: str = Field(..., min_length=10, max_length=800)
-    owner: str = Field(..., min_length=2, max_length=120)
+    """
+    Draft-friendly anchor model.
+    Empty strings are allowed at draft stage.
+    Step-level checks should be enforced by the wizard / UI.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str = ""
+    anchor_type: Literal["asset", "process", "organisation", "other"] = "asset"
+    description: str = ""
+    domains: List[str] = Field(default_factory=list)
 
 
 class RiskDefinition(BaseModel):
-    direction: RiskDirection
-    event: str = Field(..., min_length=10, max_length=500)
-    triggers: List[str] = Field(..., min_length=1)
-    cause_categories: Set[CauseCategory] = Field(..., min_length=1)
-    vulnerability: str = Field(..., min_length=10, max_length=800)
+    """
+    Draft-friendly definition model.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    event: str = ""
+    causes: List[str] = Field(default_factory=list)
+    consequences: List[str] = Field(default_factory=list)
     assumptions: List[str] = Field(default_factory=list)
-
-    @field_validator("triggers")
-    @classmethod
-    def validate_triggers(cls, v: List[str]) -> List[str]:
-        cleaned = [t.strip() for t in v if t and t.strip()]
-        if len(cleaned) < 1:
-            raise ValueError("At least one trigger is required.")
-        if any(len(t) < 3 for t in cleaned):
-            raise ValueError("Each trigger must be at least 3 characters long.")
-        return cleaned
-
-    @field_validator("event")
-    @classmethod
-    def validate_event_specificity(cls, v: str) -> str:
-        text = v.strip()
-        banned_patterns = [
-            r"\bsomething (bad|wrong)\b",
-            r"\bissues?\b",
-            r"\bproblem(s)?\b",
-            r"\brisk happens\b",
-        ]
-        if any(re.search(p, text, flags=re.IGNORECASE) for p in banned_patterns):
-            raise ValueError("Event description is too vague.")
-        if len(text.split()) < 5:
-            raise ValueError("Event description is too short.")
-        return text
+    stakeholders: List[str] = Field(default_factory=list)
 
 
-class LikelihoodAssessment(BaseModel):
-    basis: LikelihoodBasis
-    raw_value: int = Field(..., ge=1, le=3)
-    normalised: float = Field(..., ge=0, le=1)
+class RiskLikelihood(BaseModel):
+    """
+    Draft-friendly likelihood model.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    raw_value: int = 1
+    normalised: float = 0.0
+    evidence_source: str = ""
+    notes: str = ""
 
 
-class ImpactAssessment(BaseModel):
-    domains: Set[ImpactDomain] = Field(..., min_length=1)
-    worst_credible_outcome: str = Field(..., min_length=10, max_length=900)
-    reversibility: Reversibility
-    raw_value: int = Field(..., ge=1, le=3)
-    normalised: float = Field(..., ge=0, le=1)
-    acceptability_hint: AcceptabilityHint
+class RiskImpact(BaseModel):
+    """
+    Draft-friendly impact model.
+    """
 
+    model_config = ConfigDict(extra="allow")
 
-class EvaluationSnapshot(BaseModel):
-    policy_version: str
-    created_at: datetime
-    likelihood_normalised: float
-    impact_normalised: float
-    score: float
-    category: str
-    recommended_decision: str
-    inputs_hash: str
-
-
-class EvaluationFeedback(BaseModel):
-    confirmed: bool
-    challenge_note: Optional[str] = Field(default=None, max_length=700)
-
-    @model_validator(mode="after")
-    def validate_challenge_note(self) -> "EvaluationFeedback":
-        if self.confirmed is False:
-            if not self.challenge_note or not self.challenge_note.strip():
-                raise ValueError("Challenge note is required.")
-        return self
-
-
-class DecisionRecord(BaseModel):
-    decision_type: DecisionType
-    rationale: str = Field(..., min_length=5, max_length=900)
-    owner: str = Field(..., min_length=2, max_length=120)
+    raw_value: int = 1
+    normalised: float = 0.0
+    worst_credible_outcome: str = ""
+    notes: str = ""
 
 
 class RiskCaseDraft(BaseModel):
-    case_id: str = Field(..., min_length=6, max_length=64)
-    version: int = Field(..., ge=1)
-    policy_version: str
-    created_at: datetime
-    updated_at: datetime
+    """
+    Draft model used for storage and iterative editing.
 
-    anchor: RiskAnchor
-    definition: RiskDefinition
-    likelihood: LikelihoodAssessment
-    impact: ImpactAssessment
+    Intentionally permissive so a new case can be created with placeholders,
+    then completed step-by-step in Streamlit.
+    """
 
-    evaluation_snapshot: Optional[EvaluationSnapshot] = None
-    evaluation_feedback: Optional[EvaluationFeedback] = None
-    decision: Optional[DecisionRecord] = None
+    model_config = ConfigDict(extra="allow")
 
+    case_id: str
+    case_name: str = ""
+    version: int
 
-def schema_json(model: type[BaseModel]) -> Dict[str, Any]:
-    if hasattr(model, "model_json_schema"):
-        return model.model_json_schema()  # type: ignore[attr-defined]
-    return model.schema()  # type: ignore[no-any-return]
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+    policy_id: str = ""
+    policy_version: str = ""
+
+    anchor: RiskAnchor = Field(default_factory=RiskAnchor)
+    definition: RiskDefinition = Field(default_factory=RiskDefinition)
+    likelihood: RiskLikelihood = Field(default_factory=RiskLikelihood)
+    impact: RiskImpact = Field(default_factory=RiskImpact)
+
+    # Stored and edited by the app, keep them flexible but persistent.
+    decision: Dict[str, Any] = Field(default_factory=dict)
+    mitigations: List[Dict[str, Any]] = Field(default_factory=list)
+    history: List[Dict[str, Any]] = Field(default_factory=list)
+
+    def touch(self) -> "RiskCaseDraft":
+        self.updated_at = utc_now()
+        return self
