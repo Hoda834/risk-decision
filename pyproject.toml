@@ -1,18 +1,1 @@
-diff --git a/pyproject.toml b/pyproject.toml
-index 8b137891791fe96927ad78e64b0aad7bded08bdc..05f20e78afd7b397396d326d6ca584c8a3fb1d98 100644
---- a/pyproject.toml
-+++ b/pyproject.toml
-@@ -1 +1,12 @@
-+[build-system]
-+requires = ["setuptools>=68", "wheel"]
-+build-backend = "setuptools.build_meta"
- 
-+[project]
-+name = "risk-decision"
-+version = "0.1.0"
-+description = "A reproducible, auditable, and explainable risk-based decision framework"
-+requires-python = ">=3.10"
-+
-+[tool.pytest.ini_options]
-+pythonpath = ["src"]
 
