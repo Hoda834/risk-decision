@@ -1,1 +1,12 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
+[project]
+name = "risk-decision"
+version = "0.1.0"
+description = "A reproducible, auditable, and explainable risk-based decision framework"
+requires-python = ">=3.10"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
