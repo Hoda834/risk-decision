@@ -49,9 +49,14 @@ class BasicRules:
         else:
             overall = DecisionLevel.APPROVE
 
+        # Escalation is required whenever any domain reaches REJECT.
+        # Consumers should route to an authority with sufficient mandate.
+        escalate = has_high
+
         return {
             "overall": overall,
             "per_domain": per_domain,
             "rationale": rationale,
             "required_actions": required_actions,
+            "escalate": escalate,
         }

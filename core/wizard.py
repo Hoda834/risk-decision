@@ -284,6 +284,10 @@ def _normalise_1_to_5(raw: int) -> float:
 
 
 def compute_and_lock_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
+    from pathlib import Path
+    from core.engine import compute_snapshot, acceptance_requires_escalation
+    from core.policy import load_policy
+
     wiz = payload.get("wizard")
     if not isinstance(wiz, dict):
         wiz = {}
@@ -292,58 +296,70 @@ def compute_and_lock_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
     if wiz.get("locked_at_end") is True:
         return payload
 
-    l_raw = int(_get_nested(payload, "likelihood.raw_value") or 1)
-    i_raw = int(_get_nested(payload, "impact.raw_value") or 1)
+    policy_path = Path(__file__).parent.parent / "config" / "policy_config.json"
+    policy = load_policy(policy_path)
 
-    l_n = _normalise_1_to_5(l_raw)
-    i_n = _normalise_1_to_5(i_raw)
-    overall = round(l_n * i_n, 4)
-
-    if overall < 0.2:
-        category = "low"
-        decision_type = DecisionType.ACCEPT.value
-    elif overall < 0.5:
-        category = "medium"
-        decision_type = DecisionType.REDUCE.value
-    else:
-        category = "high"
-        decision_type = DecisionType.AVOID.value
-
-    _set_nested(payload, "likelihood.normalised", l_n)
-    _set_nested(payload, "impact.normalised", i_n)
-
-    key_inputs = {
+    draft_payload = {
+        "likelihood": {
+            "raw_value": int(_get_nested(payload, "likelihood.raw_value") or 1),
+            "basis": _get_nested(payload, "likelihood.basis"),
+        },
+        "impact": {
+            "raw_value": int(_get_nested(payload, "impact.raw_value") or 1),
+            "domains": _get_nested(payload, "impact.domains"),
+            "reversibility": _get_nested(payload, "impact.reversibility"),
+            "acceptability_hint": _get_nested(payload, "impact.acceptability_hint"),
+            "worst_credible_outcome": _get_nested(payload, "impact.worst_credible_outcome"),
+        },
         "anchor": payload.get("anchor"),
         "definition": payload.get("definition"),
-        "likelihood": payload.get("likelihood"),
-        "impact": payload.get("impact"),
     }
-    inputs_hash = hashlib.sha1(json.dumps(key_inputs, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
-    snap = EvaluationSnapshot(
-        created_at=_now_iso(),
-        policy_version=str((payload.get("policy_version") or "v1")),
-        overall_risk_score=overall,
-        risk_category=category,
-        inputs_hash=inputs_hash,
-    )
+    snap = compute_snapshot(draft_payload, policy)
+    requires_escalation = acceptance_requires_escalation(snap, policy)
+
+    rec = policy.recommend_decision(snap.overall_risk_score)
+    _decision_map = {
+        "accept": DecisionType.ACCEPT,
+        "reduce": DecisionType.REDUCE,
+        "avoid": DecisionType.AVOID,
+        "defer": DecisionType.DEFER,
+        "transfer": DecisionType.TRANSFER,
+    }
+    decision_type = _decision_map.get(rec, DecisionType.REDUCE)
+
+    # Check privacy or catastrophic signals in the payload
+    definition_text = json.dumps(payload.get("definition", {}), ensure_ascii=False).lower()
+    privacy_hit = any(kw in definition_text for kw in policy.privacy_keywords())
+    impact_raw = int(_get_nested(payload, "impact.raw_value") or 1)
+    catastrophic_hit = impact_raw >= policy.catastrophic_if_impact_level_gte()
+
+    _set_nested(payload, "likelihood.normalised", policy.normalise_likelihood(int(_get_nested(payload, "likelihood.raw_value") or 1)))
+    _set_nested(payload, "impact.normalised", policy.normalise_impact(int(_get_nested(payload, "impact.raw_value") or 1)))
+
+    rationale_parts = [f"Score {snap.overall_risk_score} maps to category '{snap.risk_category}' under policy {snap.policy_version}."]
+    if requires_escalation:
+        rationale_parts.append("Score meets or exceeds acceptance threshold — escalation required.")
+    if privacy_hit:
+        rationale_parts.append("Privacy-sensitive signals detected in definition.")
+    if catastrophic_hit:
+        rationale_parts.append("Impact severity meets catastrophic threshold.")
 
     decision = DecisionRecord(
-        decision_type=decision_type,
-        rationale=f"Computed score {overall} (category: {category}).",
-        owner=str((_get_nested(payload, "anchor.owner") or "")),
+        decision_type=decision_type.value,
+        rationale=" ".join(rationale_parts),
+        owner=str(_get_nested(payload, "anchor.owner") or "TBC"),
     )
 
-    feedback = EvaluationFeedback(
-        messages=[
-            "Snapshot computed using a basic scoring rule.",
-            "Replace compute_and_lock_snapshot with your full engine when ready.",
-        ]
-    )
+    feedback_messages = [f"Risk category: {snap.risk_category}."]
+    if requires_escalation or privacy_hit or catastrophic_hit:
+        feedback_messages.append("Escalation required — refer to authority matrix for approval.")
+    else:
+        feedback_messages.append("No escalation required under current policy.")
 
     payload["evaluation_snapshot"] = snap.model_dump()
     payload["decision"] = decision.model_dump()
-    payload["feedback"] = feedback.model_dump()
+    payload["feedback"] = EvaluationFeedback(messages=feedback_messages).model_dump()
     wiz["locked_at_end"] = True
     set_state(payload, WizardStateEnum.END)
     return payload

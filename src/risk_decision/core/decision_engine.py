@@ -81,6 +81,7 @@ class DecisionEngine:
         per_domain_levels = decision_parts.get("per_domain", {}) or {}
         rationale = decision_parts.get("rationale", []) or []
         required_actions = decision_parts.get("required_actions", []) or []
+        escalate = bool(decision_parts.get("escalate", False))
 
         expl_parts = self.explainability.explain(
             classifications, indicator_details, local_scores
@@ -133,6 +134,7 @@ class DecisionEngine:
             context=context,
             overall=overall,
             per_domain=per_domain,
+            notes={"escalate": escalate},
             domain_scores={
                 k: (
                     {"score": float(v.get("score", 0.0)), "level": v.get("level", "")}

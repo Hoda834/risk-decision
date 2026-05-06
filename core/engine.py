@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Any, Dict, Tuple
+from datetime import datetime, timezone
+from typing import Any, Dict
 
-from core.models import EvaluationSnapshot, RiskCaseDraft
+from core.models import EvaluationSnapshot
 from core.policy import PolicyConfig
 from core.utils import stable_hash
 
@@ -17,7 +17,6 @@ def compute_snapshot(draft_payload: Dict[str, Any], policy: PolicyConfig) -> Eva
 
     score = policy.score(lnorm, inorm)
     category = policy.classify(score)
-    rec = policy.recommend_decision(score)
 
     inputs_for_hash = {
         "anchor": draft_payload.get("anchor"),
@@ -34,15 +33,12 @@ def compute_snapshot(draft_payload: Dict[str, Any], policy: PolicyConfig) -> Eva
 
     return EvaluationSnapshot(
         policy_version=policy.policy_version,
-        created_at=datetime.utcnow(),
-        likelihood_normalised=lnorm,
-        impact_normalised=inorm,
-        score=score,
-        category=category,
-        recommended_decision=rec,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        overall_risk_score=score,
+        risk_category=category,
         inputs_hash=stable_hash(inputs_for_hash),
     )
 
 
 def acceptance_requires_escalation(snapshot: EvaluationSnapshot, policy: PolicyConfig) -> bool:
-    return float(snapshot.score) >= float(policy.acceptance_threshold())
+    return float(snapshot.overall_risk_score) >= float(policy.acceptance_threshold())
