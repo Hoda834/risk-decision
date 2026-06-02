@@ -1,0 +1,35 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Wizard runtime data (case storage written by the app)
+wizard/cases/
+wizard/drafts/
+wizard/snapshots/
+wizard/decisions/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
