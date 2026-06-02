@@ -7,6 +7,20 @@ name = "risk-decision"
 version = "0.1.0"
 description = "A reproducible, auditable, and explainable risk-based decision framework"
 requires-python = ">=3.10"
+dependencies = [
+    "typing-extensions",
+    "pydantic>=2.5.0",
+    "streamlit>=1.31.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+testpaths = ["tests"]
