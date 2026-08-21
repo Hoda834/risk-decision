@@ -4,9 +4,21 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "risk-decision"
-version = "0.1.0"
-description = "A reproducible, auditable, and explainable risk-based decision framework"
+version = "0.2.0"
+description = "A reproducible, auditable and explainable risk-based decision framework"
 requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.5.0",
+    "streamlit>=1.31.0",
+    "typing-extensions>=4.9.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = [".", "src"]
+testpaths = ["tests"]
