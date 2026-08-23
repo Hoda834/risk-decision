@@ -81,6 +81,7 @@ def main() -> int:
             }
             for d in output.per_domain
         },
+        "warnings": output.warnings,
         "rationale": output.rationale,
         "required_actions": [
             {

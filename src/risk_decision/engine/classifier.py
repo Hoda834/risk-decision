@@ -37,7 +37,11 @@ class BasicClassifier:
     def classify(self, domain_scores: Dict[str, float]) -> Dict[str, Dict[str, Any]]:
         thresholds = Thresholds(low=self.low_threshold, high=self.high_threshold)
         return {
-            domain: {"score": float(score), "level": _level_for(float(score), thresholds)}
+            domain: {
+                "score": float(score),
+                "level": _level_for(float(score), thresholds),
+                "thresholds": {"low": thresholds.low, "high": thresholds.high},
+            }
             for domain, score in domain_scores.items()
         }
 

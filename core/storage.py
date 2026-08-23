@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 from core.models import RiskCaseDraft
+
+DEFAULT_DATA_DIR = "data"
+
+_SAFE_CASE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+
+def _check_case_id(case_id: str) -> str:
+    """Case ids become directory names, so they never contain a path."""
+    if not _SAFE_CASE_ID.match(str(case_id)):
+        raise ValueError(f"Unsafe case id: {case_id!r}")
+    return str(case_id)
 
 
 @dataclass(frozen=True)
@@ -30,7 +42,7 @@ class StoragePaths:
         return self.root / "decisions"
 
     def case_dir(self, case_id: str) -> Path:
-        return self.cases_dir / case_id
+        return self.cases_dir / _check_case_id(case_id)
 
     def case_meta_path(self, case_id: str) -> Path:
         return self.case_dir(case_id) / "meta.json"
@@ -39,22 +51,22 @@ class StoragePaths:
         return self.case_dir(case_id) / "audit.log.jsonl"
 
     def draft_dir(self, case_id: str) -> Path:
-        return self.drafts_dir / case_id
+        return self.drafts_dir / _check_case_id(case_id)
 
     def draft_path(self, case_id: str, version: int) -> Path:
         return self.draft_dir(case_id) / f"v{version}.json"
 
     def snapshot_path(self, case_id: str, version: int) -> Path:
-        return self.snapshots_dir / case_id / f"v{version}.json"
+        return self.snapshots_dir / _check_case_id(case_id) / f"v{version}.json"
 
     def decision_path(self, case_id: str, version: int) -> Path:
-        return self.decisions_dir / case_id / f"v{version}.json"
+        return self.decisions_dir / _check_case_id(case_id) / f"v{version}.json"
 
 
 CasePaths = StoragePaths
 
 
-def init_case_paths(base_dir: str = ".") -> StoragePaths:
+def init_case_paths(base_dir: str = DEFAULT_DATA_DIR) -> StoragePaths:
     paths = StoragePaths(Path(base_dir).resolve())
     ensure_case_structure(paths)
     return paths
@@ -70,6 +82,8 @@ def ensure_case_structure(paths: StoragePaths) -> None:
 def list_cases(paths: StoragePaths) -> List[Dict[str, Any]]:
     ensure_case_structure(paths)
     out: List[Dict[str, Any]] = []
+    if not paths.cases_dir.exists():
+        return out
     for case_dir in sorted(paths.cases_dir.iterdir()):
         if not case_dir.is_dir():
             continue
