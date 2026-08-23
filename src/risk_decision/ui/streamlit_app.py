@@ -162,6 +162,9 @@ def main() -> None:
         st.write("Title")
         st.write(output.context.title)
 
+    for w in output.warnings:
+        st.warning(w)
+
     st.divider()
     st.subheader("Executive summary")
 

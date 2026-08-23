@@ -13,6 +13,33 @@ from risk_decision.core.decision_types import (
 )
 
 
+def _scale_warnings(
+    domain_scores: Dict[str, Any],
+    classifications: Dict[str, Any],
+) -> list[str]:
+    """Catch scores and thresholds that are on different scales.
+
+    The classifier defaults assume 0 to 100. Feed it 0 to 1 scores and every
+    domain classifies low, which reads as approval rather than as a mismatch.
+    """
+    values = []
+    for v in domain_scores.values():
+        values.append(float(v.get("score", 0.0)) if isinstance(v, dict) else float(v))
+
+    lows = [
+        float(c["thresholds"]["low"])
+        for c in classifications.values()
+        if isinstance(c, dict) and isinstance(c.get("thresholds"), dict)
+    ]
+
+    if values and lows and max(values) <= 1.0 and min(lows) > 1.0:
+        return [
+            f"All domain scores are at or below 1.0 while the low threshold is {min(lows):g}. "
+            "Scores and thresholds look like they are on different scales."
+        ]
+    return []
+
+
 class ScoringComponent(Protocol):
     def score(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
@@ -89,6 +116,8 @@ class DecisionEngine:
             "top_contributors_by_domain", {}
         ) or {}
 
+        warnings = _scale_warnings(domain_scores, classifications)
+
         per_domain: Dict[str, DomainDecision] = {}
         for domain, cls in classifications.items():
             level = per_domain_levels.get(domain, DecisionLevel.CONDITIONAL)
@@ -152,6 +181,7 @@ class DecisionEngine:
             required_actions=action_items,
             audit_trail=[],
             fingerprint=None,
+            warnings=warnings,
         )
 
         if self.audit is not None:

@@ -1,39 +1,35 @@
 from __future__ import annotations
 
 import hashlib
-import json 
-from dataclasses import dataclass
+import uuid
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
+from core.engine import compute_snapshot
 from core.models import (
     AcceptabilityHint,
     AnchorType,
     DecisionRecord,
-    DecisionType,
     Direction,
     EvaluationFeedback,
-    EvaluationSnapshot,
-    ImpactDomain,
     LikelihoodBasis,
     Reversibility,
     RiskCaseDraft,
 )
+from core.policy import PolicyConfig
+from core.questions import Question, is_vague, questions_for_step
+from core.utils import get_nested, set_nested
 
-
-@dataclass(frozen=True)
-class QuestionSpec:
-    key: str
-    label: str
-    kind: str
-    help: str = ""
-    options: Optional[List[str]] = None
-    slider_min: int = 1
-    slider_max: int = 5
-    slider_step: int = 1
+# Paths that hold a list. Everything else is stored as given.
+LIST_PATHS = {
+    "definition.triggers",
+    "definition.cause_categories",
+    "likelihood.signals",
+    "impact.domains",
+}
 
 
 class WizardStateEnum(str, Enum):
@@ -43,16 +39,16 @@ class WizardStateEnum(str, Enum):
     IMPACT = "impact"
     REVIEW = "review"
     END = "end"
-    DRAFT = "anchor"
 
 
-_STEPS: List[WizardStateEnum] = [
+_STEPS: List[WizardStateEnum] = list(WizardStateEnum)
+
+# Steps that collect answers. Review and end do not.
+QUESTION_STEPS: List[WizardStateEnum] = [
     WizardStateEnum.ANCHOR,
     WizardStateEnum.DEFINITION,
     WizardStateEnum.LIKELIHOOD,
     WizardStateEnum.IMPACT,
-    WizardStateEnum.REVIEW,
-    WizardStateEnum.END,
 ]
 
 
@@ -64,7 +60,7 @@ def get_state(payload: Dict[str, Any]) -> WizardStateEnum:
     state_str = (payload.get("wizard") or {}).get("state", WizardStateEnum.ANCHOR.value)
     try:
         return WizardStateEnum(state_str)
-    except Exception:
+    except ValueError:
         return WizardStateEnum.ANCHOR
 
 
@@ -76,159 +72,38 @@ def set_state(payload: Dict[str, Any], state: WizardStateEnum) -> None:
     wiz["state"] = state.value
 
 
+def is_locked(payload: Dict[str, Any]) -> bool:
+    return bool((payload.get("wizard") or {}).get("locked_at_end", False))
+
+
 def next_state(state: WizardStateEnum) -> WizardStateEnum:
-    try:
-        idx = _STEPS.index(state)
-    except ValueError:
-        return WizardStateEnum.ANCHOR
+    idx = _STEPS.index(state)
     return _STEPS[min(idx + 1, len(_STEPS) - 1)]
 
 
 def prev_state(state: WizardStateEnum) -> WizardStateEnum:
-    try:
-        idx = _STEPS.index(state)
-    except ValueError:
-        return WizardStateEnum.ANCHOR
+    idx = _STEPS.index(state)
     return _STEPS[max(idx - 1, 0)]
 
 
-def _enum_options(enum_cls) -> List[str]:
-    return [e.value for e in enum_cls]
+def questions_for_state(questions: List[Question], state: WizardStateEnum) -> List[Question]:
+    return questions_for_step(questions, state.value)
 
 
-def questions_for_state(state: WizardStateEnum) -> List[QuestionSpec]:
-    if state == WizardStateEnum.ANCHOR:
-        return [
-            QuestionSpec("anchor.name", "Case name", "text"),
-            QuestionSpec("anchor.owner", "Owner", "text"),
-            QuestionSpec("anchor.anchor_type", "Anchor type", "selectbox", options=_enum_options(AnchorType)),
-            QuestionSpec("anchor.value_statement", "Value statement", "textarea"),
-            QuestionSpec("anchor.direction", "Direction", "selectbox", options=_enum_options(Direction)),
-        ]
+def initial_payload(policy: PolicyConfig) -> Dict[str, Any]:
+    likelihood_min, _ = policy.scale_bounds("likelihood")
+    impact_min, _ = policy.scale_bounds("impact")
 
-    if state == WizardStateEnum.DEFINITION:
-        return [
-            QuestionSpec("definition.event", "Event", "textarea"),
-            QuestionSpec("definition.triggers", "Triggers", "textarea", help="One per line"),
-            QuestionSpec(
-                "definition.cause_categories",
-                "Cause categories",
-                "multiselect",
-                options=["People", "Process", "Technology", "Data", "Supplier", "Finance", "Regulatory", "Market", "Other"],
-            ),
-            QuestionSpec("definition.vulnerability", "Vulnerability", "textarea"),
-            QuestionSpec("definition.consequences", "Consequences", "textarea"),
-            QuestionSpec("definition.time_to_impact_months", "Time to impact (months)", "number"),
-            QuestionSpec("definition.scope", "Scope", "textarea"),
-            QuestionSpec("definition.assumptions", "Assumptions", "textarea"),
-            QuestionSpec("definition.data_used", "Data used", "textarea"),
-            QuestionSpec("definition.references", "References", "textarea"),
-        ]
-
-    if state == WizardStateEnum.LIKELIHOOD:
-        return [
-            QuestionSpec("likelihood.basis", "Likelihood basis", "selectbox", options=_enum_options(LikelihoodBasis)),
-            QuestionSpec("likelihood.signals", "Signals", "textarea", help="One per line"),
-            QuestionSpec("likelihood.raw_value", "Likelihood (1-5)", "slider", slider_min=1, slider_max=5),
-            QuestionSpec("likelihood.confidence", "Confidence (1-5)", "slider", slider_min=1, slider_max=5),
-        ]
-
-    if state == WizardStateEnum.IMPACT:
-        return [
-            QuestionSpec("impact.domains", "Impact domains", "multiselect", options=_enum_options(ImpactDomain)),
-            QuestionSpec("impact.worst_credible_outcome", "Worst credible outcome", "textarea"),
-            QuestionSpec("impact.reversibility", "Reversibility", "selectbox", options=_enum_options(Reversibility)),
-            QuestionSpec("impact.raw_value", "Impact severity (1-5)", "slider", slider_min=1, slider_max=5),
-            QuestionSpec("impact.confidence", "Confidence (1-5)", "slider", slider_min=1, slider_max=5),
-            QuestionSpec(
-                "impact.acceptability_hint",
-                "Acceptability hint",
-                "selectbox",
-                options=_enum_options(AcceptabilityHint),
-            ),
-        ]
-
-    return []
-
-
-def _get_nested(payload: Dict[str, Any], key: str) -> Any:
-    cur: Any = payload
-    for part in key.split("."):
-        if not isinstance(cur, dict):
-            return None
-        cur = cur.get(part)
-    return cur
-
-
-def _set_nested(payload: Dict[str, Any], key: str, value: Any) -> None:
-    parts = key.split(".")
-    cur: Any = payload
-    for p in parts[:-1]:
-        if not isinstance(cur.get(p), dict):
-            cur[p] = {}
-        cur = cur[p]
-    cur[parts[-1]] = value
-
-
-def apply_answer(payload: Dict[str, Any], key: str, answer: Any) -> Dict[str, Any]:
-    if key in {"definition.triggers", "likelihood.signals"}:
-        if isinstance(answer, str):
-            items = [x.strip() for x in answer.splitlines() if x.strip()]
-            _set_nested(payload, key, items)
-            return payload
-
-    if key == "definition.cause_categories":
-        if isinstance(answer, list):
-            _set_nested(payload, key, list(dict.fromkeys(answer)))
-            return payload
-
-    _set_nested(payload, key, answer)
-    return payload
-
-
-def validate_answer_for_question(q: QuestionSpec, answer: Any) -> Optional[str]:
-    if q.kind in {"text", "textarea"}:
-        if answer is None:
-            return "Required."
-        if isinstance(answer, str) and not answer.strip():
-            return "Required."
-        return None
-
-    if q.kind == "multiselect":
-        if not isinstance(answer, list) or len(answer) == 0:
-            return "Select at least one item."
-        return None
-
-    if q.kind == "number":
-        if answer is None:
-            return "Required."
-        try:
-            v = int(answer)
-        except Exception:
-            return "Enter a number."
-        if v < 0:
-            return "Must be 0 or above."
-        return None
-
-    if q.kind in {"selectbox", "slider"}:
-        if answer is None:
-            return "Required."
-        return None
-
-    return None
-
-
-def initial_payload() -> Dict[str, Any]:
     return {
-        "case_id": hashlib.sha1(_now_iso().encode("utf-8")).hexdigest()[:12],
+        "case_id": _new_case_id(),
         "version": 1,
         "wizard": {"state": WizardStateEnum.ANCHOR.value, "locked_at_end": False},
         "anchor": {
             "anchor_type": AnchorType.PROBLEM.value,
+            "name": "",
             "value_statement": "",
-            "direction": Direction.NEGATIVE.value,
-            "name": "Untitled case",
             "owner": "",
+            "direction": Direction.NEGATIVE.value,
         },
         "definition": {
             "event": "",
@@ -245,16 +120,16 @@ def initial_payload() -> Dict[str, Any]:
         "likelihood": {
             "basis": LikelihoodBasis.EXPERT_JUDGEMENT.value,
             "signals": [],
-            "raw_value": 1,
-            "normalised": 0.2,
+            "raw_value": likelihood_min,
+            "normalised": policy.normalise_likelihood(likelihood_min),
             "confidence": 3,
         },
         "impact": {
             "domains": [],
             "worst_credible_outcome": "",
             "reversibility": Reversibility.PARTIALLY_REVERSIBLE.value,
-            "raw_value": 1,
-            "normalised": 0.2,
+            "raw_value": impact_min,
+            "normalised": policy.normalise_impact(impact_min),
             "confidence": 3,
             "acceptability_hint": AcceptabilityHint.TOLERABLE.value,
         },
@@ -264,86 +139,165 @@ def initial_payload() -> Dict[str, Any]:
     }
 
 
+def _new_case_id() -> str:
+    seed = f"{_now_iso()}-{uuid.uuid4()}"
+    return hashlib.sha256(seed.encode("utf-8")).hexdigest()[:12]
+
+
+def apply_answer(payload: Dict[str, Any], path: str, answer: Any) -> Dict[str, Any]:
+    if path in LIST_PATHS:
+        set_nested(payload, path, _as_list(answer))
+        return payload
+
+    if isinstance(answer, str):
+        set_nested(payload, path, answer.strip())
+        return payload
+
+    set_nested(payload, path, answer)
+    return payload
+
+
+def _as_list(answer: Any) -> List[str]:
+    if isinstance(answer, str):
+        items = [line.strip() for line in answer.splitlines() if line.strip()]
+    elif isinstance(answer, (list, tuple)):
+        items = [str(x).strip() for x in answer if str(x).strip()]
+    elif answer in (None, ""):
+        items = []
+    else:
+        items = [str(answer).strip()]
+    return list(dict.fromkeys(items))
+
+
+def validate_answer(q: Question, answer: Any) -> Optional[str]:
+    rules = q.validation or {}
+    empty = answer is None or (isinstance(answer, str) and not answer.strip()) or answer == []
+
+    if empty:
+        return "Required." if q.required else None
+
+    if q.input_type in {"text", "textarea"}:
+        text = str(answer).strip()
+        if "min_length" in rules and len(text) < int(rules["min_length"]):
+            return f"Use at least {rules['min_length']} characters."
+        if "max_length" in rules and len(text) > int(rules["max_length"]):
+            return f"Use at most {rules['max_length']} characters."
+        if rules.get("reject_vague") and is_vague(text):
+            return "Too vague. Describe a specific event."
+        return None
+
+    if q.input_type == "list_text":
+        items = _as_list(answer)
+        if q.required and len(items) < int(rules.get("min_items", 1)):
+            return f"Give at least {rules.get('min_items', 1)} item(s), one per line."
+        min_item_length = int(rules.get("min_item_length", 0))
+        if any(len(i) < min_item_length for i in items):
+            return f"Each item needs at least {min_item_length} characters."
+        return None
+
+    if q.input_type == "multi_select":
+        items = _as_list(answer)
+        if len(items) < int(rules.get("min_items", 1)):
+            return "Select at least one item."
+        unknown = [i for i in items if q.options and i not in q.options]
+        if unknown:
+            return f"Not a valid option: {', '.join(unknown)}"
+        return None
+
+    if q.input_type == "single_select":
+        if q.options and answer not in q.options:
+            return f"Not a valid option: {answer}"
+        return None
+
+    if q.input_type in {"number", "slider", "scale"}:
+        try:
+            value = int(answer)
+        except (TypeError, ValueError):
+            return "Enter a whole number."
+        if q.input_type == "scale" and q.options and value not in q.options:
+            return f"Choose a point between {min(q.options)} and {max(q.options)}."
+        if "min" in rules and value < int(rules["min"]):
+            return f"Must be {rules['min']} or above."
+        if "max" in rules and value > int(rules["max"]):
+            return f"Must be {rules['max']} or below."
+        return None
+
+    return None
+
+
+def step_errors(
+    payload: Dict[str, Any],
+    questions: List[Question],
+    state: WizardStateEnum,
+) -> Dict[str, str]:
+    errors: Dict[str, str] = {}
+    for q in questions_for_state(questions, state):
+        message = validate_answer(q, get_nested(payload, q.path))
+        if message:
+            errors[q.path] = message
+    return errors
+
+
+def outstanding_steps(payload: Dict[str, Any], questions: List[Question]) -> List[str]:
+    return [s.value for s in QUESTION_STEPS if step_errors(payload, questions, s)]
+
+
 def make_draft_model(payload: Dict[str, Any]) -> RiskCaseDraft:
     return RiskCaseDraft.model_validate(payload)
 
 
 def try_make_draft_model(payload: Dict[str, Any]) -> Tuple[Optional[RiskCaseDraft], Optional[str]]:
     try:
-        draft = make_draft_model(payload)
-        return draft, None
+        return make_draft_model(payload), None
     except ValidationError as e:
         return None, e.json()
-    except Exception as e:
+    except Exception as e:  # pragma: no cover - defensive
         return None, str(e)
 
 
-def _normalise_1_to_5(raw: int) -> float:
-    raw = max(1, min(5, int(raw)))
-    return raw / 5.0
+def compute_and_lock_snapshot(payload: Dict[str, Any], policy: PolicyConfig) -> Dict[str, Any]:
+    """Evaluate under the policy and lock the version.
 
-
-def compute_and_lock_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
+    A locked version is never recomputed. Revising means a new version.
+    """
     wiz = payload.get("wizard")
     if not isinstance(wiz, dict):
-        wiz = {}
+        wiz = {"state": WizardStateEnum.ANCHOR.value, "locked_at_end": False}
         payload["wizard"] = wiz
 
     if wiz.get("locked_at_end") is True:
         return payload
 
-    l_raw = int(_get_nested(payload, "likelihood.raw_value") or 1)
-    i_raw = int(_get_nested(payload, "impact.raw_value") or 1)
+    snapshot = compute_snapshot(payload, policy)
 
-    l_n = _normalise_1_to_5(l_raw)
-    i_n = _normalise_1_to_5(i_raw)
-    overall = round(l_n * i_n, 4)
-
-    if overall < 0.2:
-        category = "low"
-        decision_type = DecisionType.ACCEPT.value
-    elif overall < 0.5:
-        category = "medium"
-        decision_type = DecisionType.REDUCE.value
-    else:
-        category = "high"
-        decision_type = DecisionType.AVOID.value
-
-    _set_nested(payload, "likelihood.normalised", l_n)
-    _set_nested(payload, "impact.normalised", i_n)
-
-    key_inputs = {
-        "anchor": payload.get("anchor"),
-        "definition": payload.get("definition"),
-        "likelihood": payload.get("likelihood"),
-        "impact": payload.get("impact"),
-    }
-    inputs_hash = hashlib.sha1(json.dumps(key_inputs, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
-
-    snap = EvaluationSnapshot(
-        created_at=_now_iso(),
-        policy_version=str((payload.get("policy_version") or "v1")),
-        overall_risk_score=overall,
-        risk_category=category,
-        inputs_hash=inputs_hash,
-    )
+    set_nested(payload, "likelihood.normalised", snapshot.likelihood_normalised)
+    set_nested(payload, "impact.normalised", snapshot.impact_normalised)
 
     decision = DecisionRecord(
-        decision_type=decision_type,
-        rationale=f"Computed score {overall} (category: {category}).",
-        owner=str((_get_nested(payload, "anchor.owner") or "")),
+        decision_type=snapshot.recommended_decision,
+        rationale=(
+            f"Policy {snapshot.policy_version} scored this {snapshot.overall_risk_score} "
+            f"and classified it {snapshot.risk_category}."
+        ),
+        owner=str(get_nested(payload, "anchor.owner") or "unassigned"),
+        follows_recommendation=True,
+        override_note="",
     )
 
-    feedback = EvaluationFeedback(
-        messages=[
-            "Snapshot computed using a basic scoring rule.",
-            "Replace compute_and_lock_snapshot with your full engine when ready.",
-        ]
-    )
+    messages = [
+        f"Scored under policy {snapshot.policy_version}.",
+        f"Inputs hash {snapshot.inputs_hash[:12]} covers the assessed inputs only.",
+    ]
+    for name in snapshot.applied_overrides:
+        reason = policy.overrides().get(name, {}).get("reason", "")
+        messages.append(f"Override applied: {name}. {reason}".strip())
+    if snapshot.escalation_required:
+        messages.append("Escalation required. This cannot be accepted at risk owner level alone.")
 
-    payload["evaluation_snapshot"] = snap.model_dump()
-    payload["decision"] = decision.model_dump()
-    payload["feedback"] = feedback.model_dump()
+    payload["evaluation_snapshot"] = snapshot.model_dump(mode="json")
+    payload["decision"] = decision.model_dump(mode="json")
+    payload["feedback"] = EvaluationFeedback(messages=messages).model_dump(mode="json")
+
     wiz["locked_at_end"] = True
     set_state(payload, WizardStateEnum.END)
     return payload
