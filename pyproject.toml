@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "risk-decision"
-version = "0.2.0"
+version = "0.3.0"
 description = "A reproducible, auditable and explainable risk-based decision framework"
 requires-python = ">=3.10"
 dependencies = [
@@ -16,8 +16,14 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0"]
 
+[project.scripts]
+risk-decision = "risk_decision.cli.main:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json"]
 
 [tool.pytest.ini_options]
 pythonpath = [".", "src"]

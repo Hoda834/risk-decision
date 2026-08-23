@@ -1,3 +1,5 @@
+# Runtime and test dependencies. Prefer `pip install -e ".[dev]"`, which also
+# installs the risk_decision package so `python -m risk_decision.cli.main` works.
 pydantic>=2.5.0
 streamlit>=1.31.0
 typing-extensions>=4.9.0

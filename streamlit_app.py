@@ -135,52 +135,60 @@ def _render_sidebar() -> None:
     st.sidebar.caption(f"Policy version {_policy().policy_version}")
 
 
+def _widget_key(payload: Dict[str, Any], q: Question) -> str:
+    """Keys are scoped to case and version.
+
+    Streamlit session state wins over the value argument, so a key reused across
+    cases would show, and then save, the previous case's answer.
+    """
+    return f"q_{payload['case_id']}_{payload.get('version', 1)}_{q.qid}"
+
+
 def _render_question(q: Question, payload: Dict[str, Any]) -> Any:
     current = get_nested(payload, q.path)
-    key = f"q_{q.qid}"
+    key = _widget_key(payload, q)
+    rules = q.validation or {}
+    help_text = q.help or None
 
     if q.input_type == "text":
-        return st.text_input(q.text, value=str(current or ""), help=q.help, key=key)
+        return st.text_input(q.text, value=str(current or ""), help=help_text, key=key)
 
     if q.input_type == "textarea":
-        return st.text_area(q.text, value=str(current or ""), help=q.help, key=key)
+        return st.text_area(q.text, value=str(current or ""), help=help_text, key=key)
 
     if q.input_type == "list_text":
         value = "\n".join(str(x) for x in current) if isinstance(current, list) else str(current or "")
-        return st.text_area(q.text, value=value, help=q.help or "One per line.", key=key)
+        return st.text_area(q.text, value=value, help=help_text or "One per line.", key=key)
 
     if q.input_type == "single_select":
-        opts = q.options or []
+        opts = list(q.options or [])
         idx = opts.index(current) if current in opts else 0
-        return st.selectbox(q.text, opts, index=idx, help=q.help, key=key)
+        return st.selectbox(q.text, opts, index=idx, help=help_text, key=key)
 
     if q.input_type == "multi_select":
-        opts = q.options or []
+        opts = list(q.options or [])
         default = [v for v in (current or []) if v in opts] if isinstance(current, list) else []
-        return st.multiselect(q.text, opts, default=default, help=q.help, key=key)
+        return st.multiselect(q.text, opts, default=default, help=help_text, key=key)
 
-    if q.input_type == "number":
-        lo = int(q.validation.get("min", 0))
-        hi = int(q.validation.get("max", 1_000_000))
+    if q.input_type in {"number", "slider"}:
+        lo = int(rules.get("min", 0 if q.input_type == "number" else 1))
+        hi = int(rules.get("max", 1_000_000 if q.input_type == "number" else 5))
         value = int(current) if current is not None else lo
-        return st.number_input(q.text, min_value=lo, max_value=hi, value=max(lo, min(hi, value)), step=1, help=q.help, key=key)
-
-    if q.input_type == "slider":
-        lo = int(q.validation.get("min", 1))
-        hi = int(q.validation.get("max", 5))
-        value = int(current) if current is not None else lo
-        return st.slider(q.text, min_value=lo, max_value=hi, value=max(lo, min(hi, value)), help=q.help, key=key)
+        value = max(lo, min(hi, value))
+        if q.input_type == "number":
+            return st.number_input(q.text, min_value=lo, max_value=hi, value=value, step=1, help=help_text, key=key)
+        return st.slider(q.text, min_value=lo, max_value=hi, value=value, help=help_text, key=key)
 
     if q.input_type == "scale":
         labels = q.option_labels or {}
-        points = sorted(labels)
+        points = list(q.options or sorted(labels))
         value = int(current) if current in points else points[0]
         return st.select_slider(
             q.text,
             options=points,
             value=value,
             format_func=lambda v: f"{v} - {labels.get(v, '')}",
-            help=q.help,
+            help=help_text,
             key=key,
         )
 
@@ -284,28 +292,32 @@ def _render_end(payload: Dict[str, Any]) -> None:
     for message in (payload.get("feedback") or {}).get("messages", []):
         st.write(f"- {message}")
 
+    st.caption(f"Inputs hash: {snapshot.get('inputs_hash', '')}")
+
     st.subheader("Override the recommendation")
     st.caption("The policy recommendation stands unless you record a reason.")
 
-    recommended = str(snapshot.get("recommended_decision", DecisionType.REDUCE.value))
+    recommended = str(snapshot.get("recommended_decision") or DecisionType.REDUCE.value)
     options = [d.value for d in DecisionType]
-    chosen = st.selectbox("Decision", options, index=options.index(recommended), key="override_decision")
+    index = options.index(recommended) if recommended in options else options.index(DecisionType.REDUCE.value)
+    chosen = st.selectbox("Decision", options, index=index, key="override_decision")
     note = st.text_area("Reason for the override", key="override_note")
 
     if st.button("Record decision", key="record_decision"):
-        if chosen != recommended and not note.strip():
+        follows = chosen == recommended
+        if not follows and not note.strip():
             st.error("An override needs a documented reason.")
         else:
             record = DecisionRecord(
                 decision_type=DecisionType(chosen),
                 rationale=str(decision.get("rationale") or "Policy recommendation."),
                 owner=str(get_nested(payload, "anchor.owner") or "unassigned"),
-                follows_recommendation=chosen == recommended,
+                follows_recommendation=follows,
                 override_note=note.strip(),
             )
             payload["decision"] = record.model_dump(mode="json")
             write_decision(_paths(), str(payload["case_id"]), int(payload["version"]), payload["decision"])
-            _save(payload, "decision_recorded")
+            _save(payload, "decision_recorded" if follows else "decision_overridden")
             st.rerun()
 
     st.divider()
@@ -341,7 +353,7 @@ def main() -> None:
 
     state = get_state(payload)
     st.subheader(f"Step: {state.value}")
-    st.progress(min(1.0, (list(WizardStateEnum).index(state)) / (len(list(WizardStateEnum)) - 1)))
+    st.progress(_STEPS.index(state) / (len(_STEPS) - 1))
 
     if state == WizardStateEnum.END or is_locked(payload):
         _render_end(payload)
@@ -349,6 +361,9 @@ def main() -> None:
         _render_review(payload)
     else:
         _render_step(payload, state)
+
+
+_STEPS = list(WizardStateEnum)
 
 
 if __name__ == "__main__":

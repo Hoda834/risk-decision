@@ -1,0 +1,21 @@
+{
+  "context": {
+    "decision_id": "demo-001",
+    "title": "Proceed decision for early-stage development",
+    "activity": "product_design",
+    "stage": "design",
+    "objective": "Decide whether to proceed to the next phase",
+    "risk_appetite": "medium",
+    "time_horizon": "4 weeks",
+    "metadata": {}
+  },
+  "payload": {
+    "indicator_details": {
+      "i1": { "domain": "design_maturity", "category": "unvalidated_assumptions" },
+      "i2": { "domain": "regulatory_compliance", "category": "documentation_gaps" },
+      "i3": { "domain": "manufacturing", "category": "qc_gaps" },
+      "i4": { "domain": "supply_chain", "category": "single_source_supplier" }
+    },
+    "local_scores": { "i1": 12.0, "i2": 48.0, "i3": 28.0, "i4": 52.0 }
+  }
+}
