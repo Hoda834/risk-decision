@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -242,6 +242,18 @@ def outstanding_steps(payload: Dict[str, Any], questions: List[Question]) -> Lis
     return [s.value for s in QUESTION_STEPS if step_errors(payload, questions, s)]
 
 
+def suggested_review_date(payload: Dict[str, Any], today: Optional[date] = None) -> date:
+    """Half the time to impact, capped at a year, floored at a month.
+
+    Time to impact is collected anyway. Using it for the review interval is more
+    honest than asking for a date with no anchor.
+    """
+    base = today or datetime.now(timezone.utc).date()
+    months = int(get_nested(payload, "definition.time_to_impact_months") or 0)
+    interval = min(12, max(1, months // 2 if months else 3))
+    return base + timedelta(days=interval * 30)
+
+
 def make_draft_model(payload: Dict[str, Any]) -> RiskCaseDraft:
     return RiskCaseDraft.model_validate(payload)
 
@@ -273,11 +285,14 @@ def compute_and_lock_snapshot(payload: Dict[str, Any], policy: PolicyConfig) -> 
     set_nested(payload, "likelihood.normalised", snapshot.likelihood_normalised)
     set_nested(payload, "impact.normalised", snapshot.impact_normalised)
 
+    likelihood_raw = int(get_nested(payload, "likelihood.raw_value"))
+    impact_raw = int(get_nested(payload, "impact.raw_value"))
+
     decision = DecisionRecord(
         decision_type=snapshot.recommended_decision,
         rationale=(
-            f"Policy {snapshot.policy_version} scored this {snapshot.overall_risk_score} "
-            f"and classified it {snapshot.risk_category}."
+            f"Policy {snapshot.policy_version} placed likelihood {likelihood_raw} against impact "
+            f"{impact_raw} in the {snapshot.matrix_category} cell, classified {snapshot.risk_category}."
         ),
         owner=str(get_nested(payload, "anchor.owner") or "unassigned"),
         follows_recommendation=True,
@@ -285,14 +300,20 @@ def compute_and_lock_snapshot(payload: Dict[str, Any], policy: PolicyConfig) -> 
     )
 
     messages = [
-        f"Scored under policy {snapshot.policy_version}.",
+        f"Category read from the {snapshot.matrix_category} matrix cell under policy "
+        f"{snapshot.policy_version}. The score of {snapshot.overall_risk_score} orders cases, "
+        "it does not classify them.",
         f"Inputs hash {snapshot.inputs_hash[:12]} covers the assessed inputs only.",
     ]
     for name in snapshot.applied_overrides:
         reason = policy.overrides().get(name, {}).get("reason", "")
         messages.append(f"Override applied: {name}. {reason}".strip())
-    if snapshot.escalation_required:
-        messages.append("Escalation required. This cannot be accepted at risk owner level alone.")
+    messages.extend(f"Escalation: {reason}" for reason in snapshot.escalation_reasons)
+    messages.extend(f"Acceptance blocked: {reason}" for reason in snapshot.accept_blockers)
+    if snapshot.roles_that_may_accept:
+        messages.append(
+            "Roles that may accept this category: " + ", ".join(snapshot.roles_that_may_accept) + "."
+        )
 
     payload["evaluation_snapshot"] = snapshot.model_dump(mode="json")
     payload["decision"] = decision.model_dump(mode="json")

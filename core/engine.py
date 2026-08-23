@@ -7,8 +7,8 @@ from core.models import EvaluationSnapshot
 from core.policy import PolicyConfig
 from core.utils import get_nested, stable_hash
 
-# Fields that are computed from other fields. They are excluded from the hash so
-# that inputs_hash answers "what was assessed", not "what was computed".
+# Fields computed from other fields. Excluded from the hash so that inputs_hash
+# answers "what was assessed", not "what was computed".
 DERIVED_FIELDS = ("normalised",)
 
 ASSESSED_LIKELIHOOD_FIELDS = ("raw_value", "basis", "confidence", "signals")
@@ -46,7 +46,7 @@ def apply_overrides(
     category: str,
     policy: PolicyConfig,
 ) -> Tuple[str, List[str]]:
-    """Apply policy overrides to a computed category.
+    """Apply policy overrides to a matrix category.
 
     Overrides can only raise a category, never lower it. Every one that fires is
     named in the snapshot so the reader can see why the category moved.
@@ -85,35 +85,81 @@ def apply_overrides(
     return effective, applied
 
 
-def requires_escalation(score: float, applied_overrides: List[str], policy: PolicyConfig) -> bool:
-    if float(score) >= policy.escalation_score_threshold():
-        return True
-    return bool(applied_overrides) and policy.escalate_on_any_override()
+def escalation_reasons(
+    draft_payload: Dict[str, Any],
+    category: str,
+    applied_overrides: List[str],
+    policy: PolicyConfig,
+) -> List[str]:
+    """Why this case needs approval above the risk owner."""
+    reasons: List[str] = []
+
+    if category in policy.escalation_categories():
+        reasons.append(f"Category is {category}.")
+
+    if applied_overrides and policy.escalate_on_any_override():
+        reasons.append(f"Policy override applied: {', '.join(applied_overrides)}.")
+
+    floor = policy.escalation_confidence_floor()
+    if floor is not None:
+        weak = [
+            dimension
+            for dimension in ("likelihood", "impact")
+            if int(get_nested(draft_payload, f"{dimension}.confidence") or 5) <= floor
+        ]
+        if weak:
+            reasons.append(
+                f"Confidence is {floor} or below for: {', '.join(weak)}. "
+                "A weak evidence base does not lower the risk, it widens it."
+            )
+
+    return reasons
+
+
+def accept_blockers(
+    draft_payload: Dict[str, Any],
+    category: str,
+    policy: PolicyConfig,
+) -> List[str]:
+    """Reasons this case cannot be accepted by anyone, at any level."""
+    blockers: List[str] = []
+
+    hint = get_nested(draft_payload, "impact.acceptability_hint")
+    if hint in policy.blocking_acceptability_hints():
+        blockers.append(
+            f"The assessor recorded the outcome as {hint}. "
+            "Reduce, transfer or avoid it, or revise the assessment."
+        )
+
+    hard_block = policy.hard_accept_block_category()
+    if hard_block and policy.category_rank(category) >= policy.category_rank(hard_block):
+        blockers.append(f"A {category} risk cannot be accepted under this policy.")
+
+    return blockers
 
 
 def compute_snapshot(draft_payload: Dict[str, Any], policy: PolicyConfig) -> EvaluationSnapshot:
     likelihood_raw = int(get_nested(draft_payload, "likelihood.raw_value"))
     impact_raw = int(get_nested(draft_payload, "impact.raw_value"))
 
-    likelihood_norm = policy.normalise_likelihood(likelihood_raw)
-    impact_norm = policy.normalise_impact(impact_raw)
-    score = policy.score(likelihood_norm, impact_norm)
+    base_category = policy.category_from_matrix(likelihood_raw, impact_raw)
+    category, applied = apply_overrides(draft_payload, base_category, policy)
 
-    category, applied = apply_overrides(draft_payload, policy.classify(score), policy)
+    reasons = escalation_reasons(draft_payload, category, applied, policy)
 
     return EvaluationSnapshot(
         created_at=_now_iso(),
         policy_version=policy.policy_version,
-        likelihood_normalised=likelihood_norm,
-        impact_normalised=impact_norm,
-        overall_risk_score=score,
+        likelihood_normalised=policy.normalise_likelihood(likelihood_raw),
+        impact_normalised=policy.normalise_impact(impact_raw),
+        overall_risk_score=policy.ordering_score(likelihood_raw, impact_raw),
+        matrix_category=base_category,
         risk_category=category,
         recommended_decision=policy.recommend_decision(category),
-        escalation_required=requires_escalation(score, applied, policy),
+        escalation_required=bool(reasons),
+        escalation_reasons=reasons,
         applied_overrides=applied,
+        accept_blockers=accept_blockers(draft_payload, category, policy),
+        roles_that_may_accept=policy.roles_that_can_accept(category),
         inputs_hash=stable_hash(hashable_inputs(draft_payload)),
     )
-
-
-def acceptance_requires_escalation(snapshot: EvaluationSnapshot, policy: PolicyConfig) -> bool:
-    return float(snapshot.overall_risk_score) >= policy.acceptance_threshold()

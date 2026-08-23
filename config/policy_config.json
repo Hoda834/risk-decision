@@ -1,5 +1,5 @@
 {
-  "policy_version": "v1.1",
+  "policy_version": "v1.2",
   "scales": {
     "likelihood": {
       "type": "ordinal",
@@ -33,14 +33,25 @@
     }
   },
   "scoring": {
-    "method": "multiply",
-    "rounding": {
-      "decimals": 4
+    "method": "matrix",
+    "category_matrix": {
+      "rows": "likelihood",
+      "columns": "impact",
+      "cells": {
+        "1": ["low", "low", "low", "medium", "high"],
+        "2": ["low", "low", "medium", "medium", "high"],
+        "3": ["low", "medium", "medium", "high", "critical"],
+        "4": ["low", "medium", "high", "high", "critical"],
+        "5": ["medium", "medium", "high", "critical", "critical"]
+      }
+    },
+    "ordering_score": {
+      "method": "ordinal_product",
+      "rounding": { "decimals": 4 }
     }
   },
   "thresholds": {
-    "acceptance_threshold": 0.5,
-    "hard_accept_block_threshold": 0.7,
+    "hard_accept_block_category": "critical",
     "categories": [
       { "name": "low", "min": 0.0, "max": 0.2 },
       { "name": "medium", "min": 0.2, "max": 0.5 },
@@ -63,7 +74,7 @@
       "if_text_contains": ["monitoring", "biometric", "children", "health", "location", "cctv"],
       "search_paths": ["definition.event", "definition.consequences", "impact.worst_credible_outcome"],
       "floor_category": null,
-      "reason": "Personal data signals require approval even at a low score."
+      "reason": "Personal data signals require approval even at a low category."
     }
   },
   "decision_policy": {
@@ -76,18 +87,25 @@
     "constraints": {
       "accept_requires_rationale": true,
       "accept_requires_owner": true,
-      "override_requires_note": true
+      "accept_requires_review_date": true,
+      "override_requires_note": true,
+      "escalation_requires_second_person": true,
+      "block_accept_if": {
+        "acceptability_hint_in": ["Not acceptable"]
+      }
     }
   },
   "escalation": {
     "require_approval_if": {
-      "score_gte": 0.5,
-      "any_override_applied": true
+      "category_in": ["high", "critical"],
+      "any_override_applied": true,
+      "confidence_lte": 2
     },
     "authority_matrix": [
-      { "role": "risk_owner", "max_score_to_accept": 0.2 },
-      { "role": "security_lead", "max_score_to_accept": 0.5 },
-      { "role": "management", "max_score_to_accept": 0.7 }
+      { "role": "risk_owner", "max_category_to_accept": "low" },
+      { "role": "security_lead", "max_category_to_accept": "medium" },
+      { "role": "management", "max_category_to_accept": "high" },
+      { "role": "executive_sponsor", "max_category_to_accept": "high" }
     ]
   }
 }

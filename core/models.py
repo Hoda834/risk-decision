@@ -109,11 +109,20 @@ class EvaluationSnapshot(_Strict):
     policy_version: str = Field(..., description="Policy version used.")
     likelihood_normalised: float = Field(..., ge=0.0, le=1.0)
     impact_normalised: float = Field(..., ge=0.0, le=1.0)
-    overall_risk_score: float = Field(..., ge=0.0, le=1.0, description="Overall risk score 0-1.")
+    overall_risk_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Ordering value only. The category comes from the matrix, not from this.",
+    )
+    matrix_category: str = Field(..., description="Category read from the matrix cell.")
     risk_category: str = Field(..., description="Category after any policy overrides.")
     recommended_decision: DecisionType = Field(..., description="Decision the policy recommends.")
     escalation_required: bool = Field(default=False)
+    escalation_reasons: List[str] = Field(default_factory=list)
     applied_overrides: List[str] = Field(default_factory=list)
+    accept_blockers: List[str] = Field(default_factory=list)
+    roles_that_may_accept: List[str] = Field(default_factory=list)
     inputs_hash: str = Field(..., description="SHA-256 over the assessed inputs only.")
 
 
@@ -121,6 +130,11 @@ class DecisionRecord(_Strict):
     decision_type: DecisionType = Field(..., description="Decision category.")
     rationale: str = Field(..., min_length=1, description="Why this decision.")
     owner: str = Field(..., min_length=1, description="Owner.")
+    decided_by: str = Field(default="", description="Who recorded the decision.")
+    decided_by_role: str = Field(default="", description="Authority role claimed for the decision.")
+    approved_by: str = Field(default="", description="Second person, required when escalated.")
+    review_date: str = Field(default="", description="ISO date the decision must be revisited.")
+    decided_at: str = Field(default="", description="UTC ISO timestamp of the decision.")
     follows_recommendation: bool = Field(default=True, description="False when the policy was overridden.")
     override_note: str = Field(default="", description="Reason recorded for an override.")
 
