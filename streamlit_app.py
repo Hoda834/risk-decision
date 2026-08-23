@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -11,10 +11,12 @@ ROOT = Path(__file__).resolve().parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from core.integrity import check_case
 from core.models import DecisionRecord, DecisionType
 from core.policy import PolicyConfig, load_policy
 from core.questions import Question, load_question_bank
 from core.storage import (
+    LockedVersionError,
     StoragePaths,
     append_audit,
     init_case_paths,
@@ -39,6 +41,7 @@ from core.wizard import (
     questions_for_state,
     set_state,
     step_errors,
+    suggested_review_date,
     try_make_draft_model,
     validate_answer,
 )
@@ -75,7 +78,11 @@ def _save(payload: Dict[str, Any], reason: str) -> None:
     case_id = str(payload["case_id"])
     version = int(payload.get("version", 1))
 
-    write_draft(_paths(), case_id, version, payload)
+    try:
+        write_draft(_paths(), case_id, version, payload)
+    except LockedVersionError as exc:
+        st.error(str(exc))
+        return
 
     anchor = payload.get("anchor") if isinstance(payload.get("anchor"), dict) else {}
     write_case_meta(
@@ -278,47 +285,33 @@ def _render_review(payload: Dict[str, Any]) -> None:
 def _render_end(payload: Dict[str, Any]) -> None:
     snapshot = payload.get("evaluation_snapshot") or {}
     decision = payload.get("decision") or {}
+    policy = _policy()
 
     st.success(f"Version {payload.get('version')} is locked.")
 
-    col_a, col_b, col_c = st.columns(3)
-    col_a.metric("Score", snapshot.get("overall_risk_score"))
-    col_b.metric("Category", str(snapshot.get("risk_category", "")).upper())
-    col_c.metric("Decision", str(decision.get("decision_type", "")))
+    for problem in check_case(_paths(), payload):
+        st.error(problem)
 
-    if snapshot.get("escalation_required"):
-        st.warning("Escalation required. This cannot be accepted at risk owner level alone.")
+    col_a, col_b, col_c = st.columns(3)
+    col_a.metric("Category", str(snapshot.get("risk_category", "")).upper())
+    col_b.metric("Decision", str(decision.get("decision_type", "")))
+    col_c.metric("Ordering score", snapshot.get("overall_risk_score"))
+    st.caption(
+        "The category comes from the matrix cell for this likelihood and impact. "
+        "The score orders cases within a category, it does not set one."
+    )
+
+    for reason in snapshot.get("escalation_reasons", []):
+        st.warning(f"Escalation required. {reason}")
+    for blocker in snapshot.get("accept_blockers", []):
+        st.error(f"Acceptance blocked. {blocker}")
 
     for message in (payload.get("feedback") or {}).get("messages", []):
         st.write(f"- {message}")
 
     st.caption(f"Inputs hash: {snapshot.get('inputs_hash', '')}")
 
-    st.subheader("Override the recommendation")
-    st.caption("The policy recommendation stands unless you record a reason.")
-
-    recommended = str(snapshot.get("recommended_decision") or DecisionType.REDUCE.value)
-    options = [d.value for d in DecisionType]
-    index = options.index(recommended) if recommended in options else options.index(DecisionType.REDUCE.value)
-    chosen = st.selectbox("Decision", options, index=index, key="override_decision")
-    note = st.text_area("Reason for the override", key="override_note")
-
-    if st.button("Record decision", key="record_decision"):
-        follows = chosen == recommended
-        if not follows and not note.strip():
-            st.error("An override needs a documented reason.")
-        else:
-            record = DecisionRecord(
-                decision_type=DecisionType(chosen),
-                rationale=str(decision.get("rationale") or "Policy recommendation."),
-                owner=str(get_nested(payload, "anchor.owner") or "unassigned"),
-                follows_recommendation=follows,
-                override_note=note.strip(),
-            )
-            payload["decision"] = record.model_dump(mode="json")
-            write_decision(_paths(), str(payload["case_id"]), int(payload["version"]), payload["decision"])
-            _save(payload, "decision_recorded" if follows else "decision_overridden")
-            st.rerun()
+    _render_decision_panel(payload, snapshot, decision, policy)
 
     st.divider()
     if st.button("Revise as a new version", key="revise"):
@@ -330,6 +323,117 @@ def _render_end(payload: Dict[str, Any]) -> None:
         set_state(payload, WizardStateEnum.ANCHOR)
         _save(payload, "new_version")
         st.rerun()
+
+
+def _render_decision_panel(
+    payload: Dict[str, Any],
+    snapshot: Dict[str, Any],
+    decision: Dict[str, Any],
+    policy: PolicyConfig,
+) -> None:
+    st.subheader("Record the decision")
+    st.caption("The policy recommendation stands unless someone with the authority records a reason.")
+
+    category = str(snapshot.get("risk_category", "low"))
+    recommended = str(snapshot.get("recommended_decision") or DecisionType.REDUCE.value)
+    escalated = bool(snapshot.get("escalation_required"))
+    blockers = list(snapshot.get("accept_blockers", []))
+
+    options = [d.value for d in DecisionType]
+    index = options.index(recommended) if recommended in options else options.index(DecisionType.REDUCE.value)
+
+    chosen = st.selectbox("Decision", options, index=index, key="override_decision")
+    roles = policy.authority_roles()
+    role = st.selectbox("Recorded by, acting as", roles, key="decider_role")
+    decided_by = st.text_input("Recorded by, name", key="decided_by")
+    approved_by = st.text_input(
+        "Approved by, second person",
+        help="Required while escalation is in force.",
+        key="approved_by",
+    )
+    review_date = st.date_input(
+        "Review date",
+        value=suggested_review_date(payload),
+        min_value=date.today(),
+        key="review_date",
+    )
+    note = st.text_area("Reason for the override", key="override_note")
+
+    if st.button("Record decision", key="record_decision"):
+        follows = chosen == recommended
+        problems = _decision_problems(
+            policy=policy,
+            chosen=chosen,
+            follows=follows,
+            category=category,
+            role=role,
+            decided_by=decided_by,
+            approved_by=approved_by,
+            escalated=escalated,
+            blockers=blockers,
+            note=note,
+        )
+
+        if problems:
+            for problem in problems:
+                st.error(problem)
+            return
+
+        record = DecisionRecord(
+            decision_type=DecisionType(chosen),
+            rationale=str(decision.get("rationale") or "Policy recommendation."),
+            owner=str(get_nested(payload, "anchor.owner") or "unassigned"),
+            decided_by=decided_by.strip(),
+            decided_by_role=role,
+            approved_by=approved_by.strip(),
+            review_date=review_date.isoformat(),
+            decided_at=_now_iso(),
+            follows_recommendation=follows,
+            override_note=note.strip(),
+        )
+        payload["decision"] = record.model_dump(mode="json")
+        write_decision(_paths(), str(payload["case_id"]), int(payload["version"]), payload["decision"])
+        _save(payload, "decision_recorded" if follows else "decision_overridden")
+        st.rerun()
+
+
+def _decision_problems(
+    policy: PolicyConfig,
+    chosen: str,
+    follows: bool,
+    category: str,
+    role: str,
+    decided_by: str,
+    approved_by: str,
+    escalated: bool,
+    blockers: List[str],
+    note: str,
+) -> List[str]:
+    """Every rule that can stop a decision being recorded, in one place."""
+    problems: List[str] = []
+
+    if not decided_by.strip():
+        problems.append("Name the person recording this decision.")
+
+    if not follows and policy.override_requires_note() and not note.strip():
+        problems.append("An override needs a documented reason.")
+
+    if chosen == DecisionType.ACCEPT.value:
+        problems.extend(f"Acceptance blocked. {b}" for b in blockers)
+        if not policy.can_accept(role, category):
+            allowed = policy.roles_that_can_accept(category)
+            problems.append(
+                f"{role} cannot accept a {category} risk. "
+                + (f"That takes: {', '.join(allowed)}." if allowed else "No role can accept it.")
+            )
+
+    if escalated and policy.escalation_requires_second_person():
+        if not approved_by.strip():
+            problems.append("An escalated case needs a second person to approve it.")
+        elif approved_by.strip().lower() == decided_by.strip().lower():
+            problems.append("The approver and the person recording the decision must differ.")
+
+    return problems
 
 
 def main() -> None:

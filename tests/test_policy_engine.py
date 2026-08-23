@@ -66,7 +66,9 @@ def test_hash_changes_when_an_input_changes(policy):
 
 def test_catastrophic_impact_cannot_be_classified_low(policy):
     snapshot = compute_snapshot(_draft(1, 5), policy)
-    assert snapshot.overall_risk_score == 0.0
+    # The ordering score stays low because the event is rare. The category does
+    # not follow it, which is the whole point of reading the matrix cell.
+    assert snapshot.overall_risk_score < 0.2
     assert snapshot.risk_category == "high"
     assert snapshot.recommended_decision.value == "REDUCE"
     assert "catastrophic_impact" in snapshot.applied_overrides
@@ -80,6 +82,7 @@ def test_irreversible_impact_cannot_be_classified_low(policy):
 
 def test_low_risk_stays_low(policy):
     snapshot = compute_snapshot(_draft(2, 2), policy)
+    assert snapshot.matrix_category == "low"
     assert snapshot.risk_category == "low"
     assert snapshot.recommended_decision.value == "ACCEPT"
     assert snapshot.applied_overrides == []

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -24,6 +25,10 @@ def _check_case_id(case_id: str) -> str:
 @dataclass(frozen=True)
 class StoragePaths:
     root: Path
+
+    def __post_init__(self) -> None:
+        # A string root fails several calls later with an unrelated error.
+        object.__setattr__(self, "root", Path(self.root))
 
     @property
     def cases_dir(self) -> Path:
@@ -125,17 +130,57 @@ def read_draft(paths: StoragePaths, case_id: str, version: Optional[int] = None)
     return read_version_draft(paths, case_id, v)
 
 
+class LockedVersionError(RuntimeError):
+    """Raised when a locked version's assessed inputs would change."""
+
+
 def write_draft(paths: StoragePaths, case_id: str, version: int, payload: Union[Dict[str, Any], str]) -> None:
     ensure_case_structure(paths)
     paths.draft_dir(case_id).mkdir(parents=True, exist_ok=True)
 
     if isinstance(payload, str):
         content = payload
-        json.loads(content)
+        data = json.loads(content)
     else:
+        data = payload
         content = json.dumps(payload, indent=2, ensure_ascii=False)
 
+    _refuse_if_locked_inputs_changed(paths, case_id, version, data)
     paths.draft_path(case_id, version).write_text(content, encoding="utf-8")
+
+
+def _refuse_if_locked_inputs_changed(
+    paths: StoragePaths,
+    case_id: str,
+    version: int,
+    incoming: Dict[str, Any],
+) -> None:
+    """A locked version keeps its inputs. Revising means a new version.
+
+    Recording or overriding a decision is still allowed, because that changes the
+    decision block and not the assessment behind it.
+    """
+    path = paths.draft_path(case_id, version)
+    if not path.exists():
+        return
+
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+
+    if not (existing.get("wizard") or {}).get("locked_at_end"):
+        return
+    if not (incoming.get("wizard") or {}).get("locked_at_end"):
+        return
+
+    from core.engine import hashable_inputs
+
+    if hashable_inputs(existing) != hashable_inputs(incoming):
+        raise LockedVersionError(
+            f"Case {case_id} version {version} is locked. "
+            "Revise it as a new version instead of editing the assessed inputs."
+        )
 
 
 def write_case_meta(paths: StoragePaths, case_id: str, meta: Dict[str, Any]) -> None:
@@ -154,16 +199,60 @@ def read_case_meta(paths: StoragePaths, case_id: str) -> Optional[Dict[str, Any]
         return None
 
 
+GENESIS_HASH = "0" * 64
+
+
+def _entry_hash(prev_hash: str, event: Dict[str, Any]) -> str:
+    body = {k: v for k, v in event.items() if k != "entry_hash"}
+    payload = prev_hash + json.dumps(body, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def read_audit(paths: StoragePaths, case_id: str) -> List[Dict[str, Any]]:
+    p = paths.case_audit_path(case_id)
+    if not p.exists():
+        return []
+    out: List[Dict[str, Any]] = []
+    for line in p.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            out.append(json.loads(line))
+    return out
+
+
 def append_audit(paths: StoragePaths, case_id: str, event: Dict[str, Any]) -> None:
+    """Append one hash-chained entry.
+
+    Each entry carries the hash of the one before it, so an edited or removed
+    line breaks the chain instead of passing unnoticed.
+    """
     ensure_case_structure(paths)
     paths.case_dir(case_id).mkdir(parents=True, exist_ok=True)
     p = paths.case_audit_path(case_id)
+
+    existing = read_audit(paths, case_id)
+    prev_hash = str(existing[-1].get("entry_hash", GENESIS_HASH)) if existing else GENESIS_HASH
+
     event = dict(event)
     event.setdefault("ts", datetime.now(timezone.utc).isoformat())
+    event["prev_hash"] = prev_hash
+    event["entry_hash"] = _entry_hash(prev_hash, event)
+
     if not p.exists():
         p.write_text("", encoding="utf-8")
     with p.open("a", encoding="utf-8") as f:
         f.write(json.dumps(event, ensure_ascii=False) + "\n")
+
+
+def verify_audit_log(paths: StoragePaths, case_id: str) -> Optional[int]:
+    """Return the index of the first broken entry, or None when the chain holds."""
+    prev_hash = GENESIS_HASH
+    for index, entry in enumerate(read_audit(paths, case_id)):
+        if str(entry.get("prev_hash")) != prev_hash:
+            return index
+        if str(entry.get("entry_hash")) != _entry_hash(prev_hash, entry):
+            return index
+        prev_hash = str(entry["entry_hash"])
+    return None
 
 
 def write_version_files(paths: StoragePaths, case_id: str, version: int, draft: RiskCaseDraft) -> None:

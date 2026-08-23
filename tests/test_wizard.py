@@ -82,7 +82,8 @@ def test_finish_locks_and_populates_the_snapshot(policy, questions):
 
     assert payload["wizard"]["locked_at_end"] is True
     assert payload["wizard"]["state"] == WizardStateEnum.END.value
-    assert payload["evaluation_snapshot"]["overall_risk_score"] == 0.5625
+    assert payload["evaluation_snapshot"]["overall_risk_score"] == 0.625
+    assert payload["evaluation_snapshot"]["matrix_category"] == "high"
     assert payload["evaluation_snapshot"]["risk_category"] == "high"
     assert payload["decision"]["decision_type"] == "REDUCE"
 

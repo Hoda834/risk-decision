@@ -116,6 +116,35 @@ def test_unknown_fields_are_rejected_rather_than_dropped(policy, questions):
     assert "not_a_field" in str(err)
 
 
+def test_the_decision_panel_enforces_every_governance_rule(policy):
+    from streamlit_app import _decision_problems
+
+    def problems(**kwargs):
+        base = dict(
+            policy=policy,
+            chosen="ACCEPT",
+            follows=False,
+            category="high",
+            role="management",
+            decided_by="Hoda",
+            approved_by="A second person",
+            escalated=True,
+            blockers=[],
+            note="Accepted for a two week pilot.",
+        )
+        base.update(kwargs)
+        return _decision_problems(**base)
+
+    assert problems() == []
+    assert any("documented reason" in p for p in problems(note=""))
+    assert any("cannot accept" in p for p in problems(role="risk_owner"))
+    assert any("second person" in p for p in problems(approved_by=""))
+    assert any("must differ" in p for p in problems(approved_by="Hoda"))
+    assert any("Name the person" in p for p in problems(decided_by=""))
+    assert any("Acceptance blocked" in p for p in problems(blockers=["Marked not acceptable."]))
+    assert problems(chosen="REDUCE", follows=True, note="") == []
+
+
 def test_questions_cover_only_the_four_input_steps(questions):
     for state in (WizardStateEnum.REVIEW, WizardStateEnum.END):
         assert questions_for_state(questions, state) == []

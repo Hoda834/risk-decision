@@ -1,4 +1,4 @@
-# Risk Decision Wizard, Policy Engine v1.1
+# Risk Decision Wizard, Policy Engine v1.2
 
 ## 1. Purpose
 
@@ -12,7 +12,7 @@ Every rule below is held in `config/policy_config.json` and read at runtime. The
 
 Two dimensions are assessed: likelihood and impact. Each carries a raw score, a confidence value and contextual metadata.
 
-Confidence is stored for traceability but does not alter aggregation. Interpretability is prioritised over statistical dampening.
+Confidence does not alter the category. Interpretability is prioritised over statistical dampening. It does alter the review path: confidence of 2 or below forces escalation, per section 8.
 
 ## 3. Scales
 
@@ -22,9 +22,13 @@ Likelihood: 1 rare, 2 unlikely, 3 possible, 4 likely, 5 almost certain.
 
 Impact: 1 minimal, 2 minor, 3 moderate, 4 major, 5 catastrophic.
 
+The labels carry no frequency or severity anchor yet. Two assessors will not converge until they do. Adding a rate to each likelihood point, per test or per instrument-year, and a domain-specific descriptor to each impact point is the next change to this document.
+
 The bounds in `scales.<dimension>.normalisation` are the single source of truth. The UI builds its sliders from them, so a scale change propagates without code edits. Policy load fails if the labels do not cover every point between min and max.
 
 ## 4. Normalisation
+
+Normalisation no longer drives the category, which comes from the matrix in section 6. The normalised values are retained on the snapshot for reporting and for comparison across policy versions.
 
 Both dimensions use min-max normalisation:
 
@@ -44,36 +48,64 @@ With min 1 and max 5:
 
 Values outside the range are clamped to 0.0 and 1.0.
 
-Impact severity applies uniformly across selected domains. No domain weighting is applied.
+Impact severity applies uniformly across selected domains. No domain weighting is applied, so one severity value covers a case tagged both Safety and Financial. Per-domain severity descriptors, with the maximum taken across the selected domains, is a known gap.
 
 ## 5. Aggregation
 
+Likelihood and impact are ordinal. The distance between "possible" and "likely" is not defined, so multiplying the two points produces a number whose ordering is an artefact of the normalisation rather than a property of the risk. Policy v1.1 did exactly that, and 9 of its 25 cells scored zero because a 1 on either axis wiped out the other.
+
+v1.2 does not aggregate. The category is read from an explicit cell:
+
 ```
-overall_risk_score = round(likelihood_normalised * impact_normalised, decimals)
+category = scoring.category_matrix.cells[likelihood][impact]
 ```
 
-Range 0.00 to 1.00. Both dimensions must be elevated for the score to be elevated. High impact alone or high likelihood alone does not produce a high score.
+Every cell is a stated governance position, reviewable on its own terms.
 
-Multiplication has one known consequence: a likelihood of 1 drives the score to zero regardless of impact. Section 7 handles that case explicitly rather than leaving it to the reader.
+A separate ordering score is kept for sorting cases within and across categories:
+
+```
+overall_risk_score = (likelihood * impact - 1) / 24
+```
+
+It orders. It does not classify. The snapshot records both, and the UI labels the score as an ordering value so it is not read as a severity.
 
 ## 6. Categories and decisions
 
+The matrix in `config/policy_config.json`:
+
 ```
-0.00 <= score < 0.20   low        ACCEPT
-0.20 <= score < 0.50   medium     REDUCE
-0.50 <= score < 0.80   high       REDUCE
-0.80 <= score <= 1.00  critical   AVOID
+L\I        1          2          3          4          5
+ 1        low        low        low        medium     high
+ 2        low        low        medium     medium     high
+ 3        low        medium     medium     high       critical
+ 4        low        medium     high       high       critical
+ 5        medium     medium     high       critical   critical
 ```
+
+Decisions map from the category:
+
+```
+low        ACCEPT
+medium     REDUCE
+high       REDUCE
+critical   AVOID
+```
+
+Two properties are enforced on load, so a bad edit cannot reach production:
+
+- Every cell names a category in the vocabulary, and every likelihood point has a row.
+- The grid is monotonic. Category never falls as likelihood or impact rises. A dip is a governance error, not a preference.
+
+Impact 4 has a floor of medium and impact 5 a floor of high, visible in the columns. That is the deliberate correction to v1.1, where an unlikely major impact returned ACCEPT.
 
 Decisions use the same vocabulary as `DecisionType` in `core/models.py`: ACCEPT, REDUCE, TRANSFER, AVOID, DEFER. No other decision words appear anywhere in the system.
-
-Category bands must be contiguous and cover the full range. Policy load fails otherwise, so a gap cannot reach production silently.
 
 ## 7. Overrides
 
 Overrides raise a result. They never lower one.
 
-**Catastrophic impact.** Impact of 5 forces a minimum category of high and a minimum decision of REDUCE, whatever the likelihood. A rare event with a catastrophic worst credible outcome is not a low risk.
+**Catastrophic impact.** Impact of 5 forces a minimum category of high, whatever the likelihood. The matrix already holds column 5 at high or above, so this override changes nothing on its own. It is kept because it also triggers escalation and it names itself in the record, and because it keeps the rule stated rather than implicit in a grid someone may later edit.
 
 **Irreversible consequences.** Reversibility of "Irreversible" forces a minimum category of medium. Irreversibility removes the option of correcting the outcome later, so it cannot be classified as low.
 
@@ -81,17 +113,28 @@ Overrides raise a result. They never lower one.
 
 Applied overrides are listed in `applied_overrides` on the snapshot and named in the case feedback.
 
-## 8. Escalation
+## 8. Escalation and authority
 
-Escalation is required when the score reaches `escalation.require_approval_if.score_gte`, or when any override is applied.
+Escalation is required when any of these hold, and the reason is recorded on the snapshot:
 
-The authority matrix caps what each role may accept:
+- The category is high or critical.
+- Any override fired.
+- Confidence is 2 or below on either dimension. A weak evidence base does not lower the risk, it widens it, so it changes the review path and not the category.
+
+The authority matrix caps what each role may accept, by category rather than by score:
 
 ```
-risk_owner      up to 0.2
-security_lead   up to 0.5
-management      up to 0.7
+risk_owner          up to low
+security_lead       up to medium
+management          up to high
+executive_sponsor   up to high
 ```
+
+`thresholds.hard_accept_block_category` is critical, so no role may accept a critical risk. Load fails if the matrix grants a role more than the hard block allows.
+
+Acceptance is also blocked, at any level, when the assessor recorded the outcome as "Not acceptable". Asking the question and then ignoring the answer would be worse than not asking.
+
+An escalated case needs a second person. The approver and the person recording the decision must be different, and an ACCEPT decision needs a review date.
 
 ## 9. Design constraints
 
@@ -101,13 +144,17 @@ The engine deliberately avoids hidden weighting, domain weighting, confidence sc
 
 No Bayesian updating, no longitudinal calibration, no domain-specific weighting, no machine learning adjustment, no historical tuning. All excluded on purpose.
 
-Also absent, and planned rather than excluded: risk controls, residual risk after mitigation, and a register view across multiple cases.
+Also absent, and planned rather than excluded: risk controls, residual risk after mitigation, benefit-risk analysis, a register view across multiple cases, and frequency anchors on the scale labels.
+
+The wizard covers identification, analysis, evaluation and a decision. It does not cover treatment. A case can be decided but not closed.
 
 ## 11. Versioning and governance
 
 Every snapshot stores `policy_version`, `created_at` and `inputs_hash`.
 
-`inputs_hash` is a SHA-256 hash of the assessed inputs only. Derived values are excluded, so the hash answers "what was assessed", not "what was computed".
+`inputs_hash` is a SHA-256 hash of the assessed inputs only. Derived values are excluded, so the hash answers "what was assessed", not "what was computed". It is verified on load. A locked version refuses a write that would change its assessed inputs, so revising means a new version.
+
+The audit log is hash-chained. Each entry carries the hash of the one before it, so an edited or removed line breaks the chain rather than passing unnoticed.
 
 Any change to normalisation, aggregation, thresholds, decision mapping or overrides requires a policy version increment. Outputs from different policy versions are not directly comparable.
 
