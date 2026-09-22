@@ -1,3 +1,12 @@
+# Risk Decision 0.4
+
+Local pilot for assessed risks, actions and evidence-based review.
+
+Install `python -m pip install -e ".[dev]"` and launch `risk-decision-app`.
+See [the 0.4 guide](docs/v0.4.md) and [evaluation plan](docs/research-plan.md).
+
+The description below documents the original assessment and batch models. Wizard implementation now lives in `src/risk_decision/wizard_core`; packaged configuration is in `src/risk_decision/config`.
+
 # risk-decision
 
 A reproducible, auditable and explainable risk-based decision framework.
@@ -17,7 +26,7 @@ pip install -e ".[dev]"
 
 ./run.sh                                     # wizard
 python -m risk_decision.cli.main input.example.json  # batch engine
-pytest                                       # 59 tests
+pytest
 ```
 
 The wizard writes case data to `data/` in the working directory. That path is gitignored.
@@ -143,9 +152,9 @@ Overrides can raise a category, never lower it. Every one that fires is named in
 
 ## Not implemented yet
 
-- Risk controls and residual risk after mitigation, so a case can be decided but not closed
+- Quantified control-effect modelling; v0.4 instead records actions and requires manual reassessment before closure
 - Benefit-risk analysis
-- A register view ranking multiple cases against each other, and duplicate detection between cases
+- Duplicate detection between cases; v0.4 provides a register filtered by action and review status
 - Frequency anchors on the likelihood labels, and per-domain severity descriptors
 - Automated risk identification from a library. The taxonomy in `src/risk_decision/domain/` is not yet wired into the wizard
 - Upside risk. `anchor.direction` is recorded, but the decision vocabulary is downside only
