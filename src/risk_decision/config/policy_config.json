@@ -1,0 +1,111 @@
+{
+  "policy_version": "v1.2",
+  "scales": {
+    "likelihood": {
+      "type": "ordinal",
+      "labels": {
+        "1": "rare",
+        "2": "unlikely",
+        "3": "possible",
+        "4": "likely",
+        "5": "almost certain"
+      },
+      "normalisation": {
+        "method": "minmax",
+        "min": 1,
+        "max": 5
+      }
+    },
+    "impact": {
+      "type": "ordinal",
+      "labels": {
+        "1": "minimal",
+        "2": "minor",
+        "3": "moderate",
+        "4": "major",
+        "5": "catastrophic"
+      },
+      "normalisation": {
+        "method": "minmax",
+        "min": 1,
+        "max": 5
+      }
+    }
+  },
+  "scoring": {
+    "method": "matrix",
+    "category_matrix": {
+      "rows": "likelihood",
+      "columns": "impact",
+      "cells": {
+        "1": ["low", "low", "low", "medium", "high"],
+        "2": ["low", "low", "medium", "medium", "high"],
+        "3": ["low", "medium", "medium", "high", "critical"],
+        "4": ["low", "medium", "high", "high", "critical"],
+        "5": ["medium", "medium", "high", "critical", "critical"]
+      }
+    },
+    "ordering_score": {
+      "method": "ordinal_product",
+      "rounding": { "decimals": 4 }
+    }
+  },
+  "thresholds": {
+    "hard_accept_block_category": "critical",
+    "categories": [
+      { "name": "low", "min": 0.0, "max": 0.2 },
+      { "name": "medium", "min": 0.2, "max": 0.5 },
+      { "name": "high", "min": 0.5, "max": 0.8 },
+      { "name": "critical", "min": 0.8, "max": 1.01 }
+    ]
+  },
+  "overrides": {
+    "catastrophic_impact": {
+      "if_impact_level_gte": 5,
+      "floor_category": "high",
+      "reason": "A catastrophic worst credible outcome cannot be classified below high."
+    },
+    "irreversible_impact": {
+      "if_reversibility_in": ["Irreversible"],
+      "floor_category": "medium",
+      "reason": "An irreversible outcome cannot be classified below medium."
+    },
+    "privacy_signal": {
+      "if_text_contains": ["monitoring", "biometric", "children", "health", "location", "cctv"],
+      "search_paths": ["definition.event", "definition.consequences", "impact.worst_credible_outcome"],
+      "floor_category": null,
+      "reason": "Personal data signals require approval even at a low category."
+    }
+  },
+  "decision_policy": {
+    "by_category": {
+      "low": "ACCEPT",
+      "medium": "REDUCE",
+      "high": "REDUCE",
+      "critical": "AVOID"
+    },
+    "constraints": {
+      "accept_requires_rationale": true,
+      "accept_requires_owner": true,
+      "accept_requires_review_date": true,
+      "override_requires_note": true,
+      "escalation_requires_second_person": true,
+      "block_accept_if": {
+        "acceptability_hint_in": ["Not acceptable"]
+      }
+    }
+  },
+  "escalation": {
+    "require_approval_if": {
+      "category_in": ["high", "critical"],
+      "any_override_applied": true,
+      "confidence_lte": 2
+    },
+    "authority_matrix": [
+      { "role": "risk_owner", "max_category_to_accept": "low" },
+      { "role": "security_lead", "max_category_to_accept": "medium" },
+      { "role": "management", "max_category_to_accept": "high" },
+      { "role": "executive_sponsor", "max_category_to_accept": "high" }
+    ]
+  }
+}

@@ -9,10 +9,10 @@ from typing import Any, Dict, List
 
 import pytest
 
-from core.models import RiskCaseDraft
-from core.policy import load_policy
-from core.questions import Question, load_question_bank
-from core.wizard import (
+from risk_decision.wizard_core.models import RiskCaseDraft
+from risk_decision.wizard_core.policy import load_policy
+from risk_decision.wizard_core.questions import Question, load_question_bank
+from risk_decision.wizard_core.wizard import (
     WizardStateEnum,
     apply_answer,
     compute_and_lock_snapshot,
@@ -92,7 +92,7 @@ def test_a_full_run_locks_and_scores(policy, questions):
 
 
 def test_an_override_note_survives_the_round_trip(policy, questions):
-    from core.models import DecisionRecord, DecisionType
+    from risk_decision.wizard_core.models import DecisionRecord, DecisionType
 
     record = DecisionRecord(
         decision_type=DecisionType.ACCEPT,

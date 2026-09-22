@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from core.engine import compute_snapshot
-from core.policy import load_policy
+from risk_decision.wizard_core.engine import compute_snapshot
+from risk_decision.wizard_core.policy import load_policy
 
 
 @pytest.fixture(scope="module")

@@ -1,3 +1,7 @@
+# 0.4.0
+
+Packaged wizard and configuration; retained original batch CLI. Added reviewed text intake, optional Ollama adapter, action evidence, version-preserving reassessment, closure guards and register. Prevented lock-flag bypass within an existing assessment version. Added lifecycle and provider-contract tests. No live-model quality claim.
+
 # Fixes applied
 
 The wizard and two test modules were written against a version of `core/` that
