@@ -1,8 +1,8 @@
 import pytest
 
-from core.policy import load_policy
-from core.questions import load_question_bank
-from core.wizard import (
+from risk_decision.wizard_core.policy import load_policy
+from risk_decision.wizard_core.questions import load_question_bank
+from risk_decision.wizard_core.wizard import (
     WizardStateEnum,
     apply_answer,
     compute_and_lock_snapshot,

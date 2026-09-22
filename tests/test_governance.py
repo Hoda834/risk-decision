@@ -10,10 +10,10 @@ from pathlib import Path
 
 import pytest
 
-from core.engine import compute_snapshot
-from core.integrity import check_case, snapshot_matches_inputs
-from core.policy import load_policy
-from core.storage import (
+from risk_decision.wizard_core.engine import compute_snapshot
+from risk_decision.wizard_core.integrity import check_case, snapshot_matches_inputs
+from risk_decision.wizard_core.policy import load_policy
+from risk_decision.wizard_core.storage import (
     LockedVersionError,
     StoragePaths,
     append_audit,
@@ -21,7 +21,7 @@ from core.storage import (
     verify_audit_log,
     write_draft,
 )
-from core.wizard import compute_and_lock_snapshot, initial_payload, suggested_review_date
+from risk_decision.wizard_core.wizard import compute_and_lock_snapshot, initial_payload, suggested_review_date
 
 
 @pytest.fixture(scope="module")
